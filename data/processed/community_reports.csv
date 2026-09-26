@@ -1,0 +1,7 @@
+report_id,latitude,longitude,category,severity,status,trust_score,created_at_ms,note
+seed-1,19.1195,72.8465,lighting,4,verified,70,1790233747241,Poor street lighting after 9pm
+seed-2,19.1188,72.8472,harassment,5,verified,75,1789974547241,Verbal harassment near junction
+seed-3,19.0901,72.8368,crime,4,verified,65,1789542547241,Phone snatching reported
+seed-4,19.0598,72.8292,lighting,3,pending,55,1790320147241,Dim stretch near station approach
+seed-5,19.113,72.869,infrastructure,3,verified,60,1789801747241,"Broken pavement, trip hazard"
+seed-6,19.0175,72.8475,crime,4,verified,80,1790147347241,Unsafe after dark — multiple reports

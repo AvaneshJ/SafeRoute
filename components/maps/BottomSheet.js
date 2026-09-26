@@ -8,11 +8,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-<<<<<<< HEAD
-import { GlobalStyles } from "../../constants/GlobalStyles";
-=======
 import { useAppTheme } from "@/hooks/useAppTheme";
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
 
 const { height } = Dimensions.get("window");
 
@@ -38,10 +34,7 @@ const BottomSheet = ({
   onShareLocation, // NEW PROP
   onClose,
 }) => {
-<<<<<<< HEAD
-=======
   const { colors: c, elevation: elev } = useAppTheme();
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
   if (showBottomSheet !== true || !selectedLocation) {
     return null;
   }
@@ -50,10 +43,7 @@ const BottomSheet = ({
     <Animated.View
       style={[
         styles.bottomSheet,
-<<<<<<< HEAD
-=======
         { backgroundColor: c.surface, ...elev.sheet },
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
         {
           transform: [
             {
@@ -66,12 +56,6 @@ const BottomSheet = ({
         },
       ]}
     >
-<<<<<<< HEAD
-      <TouchableOpacity style={styles.bottomSheetHandle} onPress={onClose} />
-      <View style={styles.bottomSheetContent}>
-        <Text style={styles.bottomSheetTitle}>{selectedLocation?.title}</Text>
-        <Text style={styles.bottomSheetSubtitle}>
-=======
       <TouchableOpacity
         style={[styles.bottomSheetHandle, { backgroundColor: c.border }]}
         onPress={onClose}
@@ -81,7 +65,6 @@ const BottomSheet = ({
           {selectedLocation?.title}
         </Text>
         <Text style={[styles.bottomSheetSubtitle, { color: c.textSecondary }]}>
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
           {selectedLocation?.subtitle}
         </Text>
 
@@ -91,15 +74,11 @@ const BottomSheet = ({
             onPress={onStartNavigation}
           >
             <Text style={styles.actionButtonText}>🛡️</Text>
-<<<<<<< HEAD
-            <Text style={styles.actionButtonLabel}>Safe Route</Text>
-=======
             <Text
               style={[styles.actionButtonLabel, { color: c.textSecondary }]}
             >
               Safe Route
             </Text>
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
           </TouchableOpacity>
 
           {/* NEW: Save Button */}
@@ -108,15 +87,11 @@ const BottomSheet = ({
             onPress={() => onSaveLocation(selectedLocation)}
           >
             <Text style={styles.actionButtonText}>💾</Text>
-<<<<<<< HEAD
-            <Text style={styles.actionButtonLabel}>Save</Text>
-=======
             <Text
               style={[styles.actionButtonLabel, { color: c.textSecondary }]}
             >
               Save
             </Text>
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
           </TouchableOpacity>
 
           {/* NEW: Share Button */}
@@ -125,15 +100,11 @@ const BottomSheet = ({
             onPress={onShareLocation}
           >
             <Text style={styles.actionButtonText}>📤</Text>
-<<<<<<< HEAD
-            <Text style={styles.actionButtonLabel}>Share</Text>
-=======
             <Text
               style={[styles.actionButtonLabel, { color: c.textSecondary }]}
             >
               Share
             </Text>
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
           </TouchableOpacity>
 
           {/* Removed Call button as per your previous instruction */}
@@ -153,25 +124,13 @@ const styles = StyleSheet.create({
     bottom: 70,
     left: 0,
     right: 0,
-<<<<<<< HEAD
-    backgroundColor: "white",
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    ...GlobalStyles.shadow,
-    paddingBottom: 20, // Add padding for safe area on iOS
-=======
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     paddingBottom: 20,
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
   },
   bottomSheetHandle: {
     width: 40,
     height: 4,
-<<<<<<< HEAD
-    backgroundColor: GlobalStyles.colors.lightGray,
-=======
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
     borderRadius: 2,
     alignSelf: "center",
     marginTop: 8,
@@ -183,18 +142,10 @@ const styles = StyleSheet.create({
   bottomSheetTitle: {
     fontSize: 20,
     fontWeight: "bold",
-<<<<<<< HEAD
-    color: GlobalStyles.colors.textPrimary,
-=======
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
     marginTop: 8,
   },
   bottomSheetSubtitle: {
     fontSize: 14,
-<<<<<<< HEAD
-    color: GlobalStyles.colors.textSecondary,
-=======
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
     marginTop: 4,
   },
   bottomSheetActions: {
@@ -212,10 +163,6 @@ const styles = StyleSheet.create({
   },
   actionButtonLabel: {
     fontSize: 12,
-<<<<<<< HEAD
-    color: GlobalStyles.colors.textSecondary,
-=======
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
   },
 });
 

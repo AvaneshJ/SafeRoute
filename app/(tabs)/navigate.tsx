@@ -1,36 +1,10 @@
 // SafeMaps.js (Main Application Component)
 
-<<<<<<< HEAD
-import { MaterialIcons } from "@expo/vector-icons"; // For the saved places icon
-=======
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
 import AsyncStorage from "@react-native-async-storage/async-storage"; // Import AsyncStorage for saving locations
 import {
   useFocusEffect,
   useNavigation,
   useRoute,
-<<<<<<< HEAD
-} from "@react-navigation/native";
-import Constants from "expo-constants";
-import * as Location from "expo-location";
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import {
-  Alert,
-  Animated,
-  Dimensions,
-  Platform,
-  SafeAreaView,
-  Share,
-  StatusBar, // For platform-specific styling
-  StyleSheet,
-  Text, // Import Share API for sharing locations
-  TouchableOpacity,
-  View,
-} from "react-native";
-
-// Import all custom components
-import BottomSheet from "../../components/maps/BottomSheet";
-=======
 } from "expo-router/react-navigation";
 import Constants from "expo-constants";
 import * as Linking from "expo-linking";
@@ -48,23 +22,10 @@ import {
   legacySafetyLabel,
 } from "../../core/safetyScore";
 import { MapTripSheet } from "../../components/maps/MapTripSheet";
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
 import DirectionsModal from "../../components/maps/DirectionModal";
 import LoadingOverlay from "../../components/maps/LoadingOverlay";
 import LongPressInstruction from "../../components/maps/LongPressInstruction";
 import MapDisplay from "../../components/maps/MapDisplay";
-<<<<<<< HEAD
-import NavigationHeader from "../../components/maps/NavigationHeader";
-import NearestPlaceConfirmationModal from "../../components/maps/NearestPlaceConfirmationModal";
-import RouteOptionsDisplay from "../../components/maps/RouteOptionDisplay";
-import SafetyReviewModal from "../../components/maps/SafetyReviewModal";
-import SearchBar from "../../components/maps/SearchBar";
-
-// Import global styles
-import { GlobalStyles } from "../../constants/GlobalStyles";
-
-const { width, height } = Dimensions.get("window");
-=======
 import { LiveNavigationHUD } from "../../components/navigation/LiveNavigationHUD";
 import {
   GUARDIANS_STORAGE_KEY,
@@ -109,7 +70,6 @@ import {
   mapsLink,
   notifyGuardianSms,
 } from "@/services/guardianAlerts";
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
 
 // --- Interface Definitions for better type safety (if using TypeScript) ---
 interface Coordinate {
@@ -142,16 +102,6 @@ interface DangerousArea {
   severity: number;
 }
 
-<<<<<<< HEAD
-interface RouteInfo {
-  distance: number;
-  duration: number;
-  safety: any; // Safety analysis object
-  color: string; // Color based on safety
-  title: string; // Route title (e.g., Primary Route, Alternative Route)
-  description: string; // Distance and duration string
-  directions: any[]; // Turn-by-turn directions
-=======
 interface RouteDraft {
   id: string;
   coordinates: Coordinate[];
@@ -166,41 +116,27 @@ interface RouteInfo extends RouteDraft {
   color: string;
   title: string;
   mode?: "safest" | "balanced" | "fastest";
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
 }
 
 const SafeMaps = () => {
   // --- Navigation Hooks ---
-<<<<<<< HEAD
-  const route = useRoute();
-  const navigation = useNavigation();
-=======
   const route = useRoute() as { params?: Record<string, any> };
   const navigation = useNavigation() as {
     navigate: (name: string, params?: object) => void;
     setParams: (params: object) => void;
   };
   const { colors: themeColors, isDark } = useAppTheme();
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
   const { showPoliceStations, showHospitals } = route.params || {};
 
   // --- State for Location and Map ---
   const [location, setLocation] = useState<Location.LocationObject | null>(
-<<<<<<< HEAD
-    null
-=======
     null,
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
   );
   const [isLocationReady, setIsLocationReady] = useState<boolean>(false); // NEW: Track if location is ready
   const [mapRegion, setMapRegion] = useState<any>(null); // Map's visible region
   const mapRef = useRef<any>(null); // Reference to MapView component
   const [currentRegionName, setCurrentRegionName] = useState<string | null>(
-<<<<<<< HEAD
-    null
-=======
     null,
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
   ); // Current city/region name
 
   // NEW: State for location watcher subscription
@@ -212,11 +148,7 @@ const SafeMaps = () => {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [showSearchResults, setShowSearchResults] = useState<boolean>(false);
   const [selectedLocation, setSelectedLocation] = useState<SearchResult | null>(
-<<<<<<< HEAD
-    null
-=======
     null,
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
   );
 
   // --- State for Route and Navigation ---
@@ -226,11 +158,6 @@ const SafeMaps = () => {
   const [selectedRouteIndex, setSelectedRouteIndex] = useState<number>(0);
   const [isCalculatingRoute, setIsCalculatingRoute] = useState<boolean>(false);
   const [isNavigationMode, setIsNavigationMode] = useState<boolean>(false);
-<<<<<<< HEAD
-  const [directions, setDirections] = useState<any[]>([]); // Turn-by-turn directions
-  const [showDirectionsModal, setShowDirectionsModal] =
-    useState<boolean>(false);
-=======
   const [directions, setDirections] = useState<NavStep[]>([]); // Turn-by-turn steps
   const [showDirectionsModal, setShowDirectionsModal] =
     useState<boolean>(false);
@@ -247,7 +174,6 @@ const SafeMaps = () => {
   const arrivedAlertedRef = useRef(false);
   const navShareSessionRef = useRef("");
   const navShareUploadAtRef = useRef(0);
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
 
   // NEW: State to hold navigation params for a pending route calculation
   const [pendingNavigationRoute, setPendingNavigationRoute] = useState<
@@ -259,21 +185,15 @@ const SafeMaps = () => {
   const [dangerousAreas, setDangerousAreas] = useState<DangerousArea[]>([]);
   const [safeRouteOnly, setSafeRouteOnly] = useState<boolean>(true); // Toggle for prioritizing safe routes
   const [showReviewModal, setShowReviewModal] = useState<boolean>(false);
-<<<<<<< HEAD
-  const [reviewLocation, setReviewLocation] = useState<Coordinate | null>(null); // Location for new review
-=======
   const [reviewLocation, setReviewLocation] = useState<Coordinate | null>(null);
   const [reviewPlaceLabel, setReviewPlaceLabel] = useState<string | null>(null);
   const [reviewPlaceSubtitle, setReviewPlaceSubtitle] = useState<string | null>(
     null,
   );
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
 
   // --- State for UI Overlays ---
   const [showLongPressInstruction, setShowLongPressInstruction] =
     useState<boolean>(false);
-<<<<<<< HEAD
-=======
   const longPressTipShownRef = useRef(false);
 
   const LONG_PRESS_TIP_KEY = "@SafeRoute:longPressTipSeen";
@@ -287,7 +207,6 @@ const SafeMaps = () => {
       // ignore persistence failures
     }
   }, []);
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
 
   // --- State for Nearby Places (Police/Hospital) ---
   const [nearbyPoliceStations, setNearbyPoliceStations] = useState<
@@ -320,15 +239,6 @@ const SafeMaps = () => {
 
   // --- Effects ---
 
-<<<<<<< HEAD
-  // Initial location and safety data load on component mount
-  useEffect(() => {
-    getCurrentLocation();
-    loadSafetyData();
-  }, []);
-
-  // Set initial map region and show long press instruction when location is available
-=======
   /**
    * Phase 5: load community reports for the heat map.
    * Prefers Firestore reports near the user; falls back to Mumbai seed samples.
@@ -436,7 +346,6 @@ const SafeMaps = () => {
   }, [location, loadSafetyData]);
 
   // Set initial map region when location is available
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
   useEffect(() => {
     if (location) {
       setMapRegion({
@@ -445,21 +354,6 @@ const SafeMaps = () => {
         latitudeDelta: 0.0922,
         longitudeDelta: 0.0421,
       });
-<<<<<<< HEAD
-      const timer = setTimeout(() => {
-        setShowLongPressInstruction(true);
-      }, 2000);
-      const hideTimer = setTimeout(() => {
-        setShowLongPressInstruction(false);
-      }, 8000);
-      return () => {
-        clearTimeout(timer);
-        clearTimeout(hideTimer);
-      };
-    }
-  }, [location]);
-
-=======
     }
   }, [location]);
 
@@ -500,7 +394,6 @@ const SafeMaps = () => {
     };
   }, [isLocationReady, dismissLongPressTip]);
 
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
   // Effect to trigger nearby search based on navigation route parameters (from Home screen)
   useEffect(() => {
     if (location && (showPoliceStations || showHospitals)) {
@@ -531,12 +424,6 @@ const SafeMaps = () => {
     }
   }, [location, showPoliceStations, showHospitals, navigation]);
 
-<<<<<<< HEAD
-  // Effect to capture navigation parameters from SavedPlacesScreen
-  useFocusEffect(
-    useCallback(() => {
-      if (route.params?.selectedPlaceForMap) {
-=======
   // Effect to capture navigation parameters from SavedPlacesScreen / Destination Search
   useFocusEffect(
     useCallback(() => {
@@ -544,83 +431,27 @@ const SafeMaps = () => {
       if (!params) return;
 
       if (params.selectedPlaceForMap) {
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
         const {
           selectedPlaceForMap,
           selectedPlaceTitle,
           selectedPlaceSubtitle,
-<<<<<<< HEAD
-        } = route.params;
-
-        // Store the params in a state variable to be processed once location is ready
-=======
         } = params as {
           selectedPlaceForMap: { latitude: number; longitude: number };
           selectedPlaceTitle: string;
           selectedPlaceSubtitle: string;
         };
 
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
         setPendingNavigationRoute({
           coordinate: selectedPlaceForMap,
           title: selectedPlaceTitle,
           subtitle: selectedPlaceSubtitle,
         });
 
-<<<<<<< HEAD
-        // Clear the params immediately so it's not re-processed on subsequent focuses
-=======
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
         navigation.setParams({
           selectedPlaceForMap: undefined,
           selectedPlaceTitle: undefined,
           selectedPlaceSubtitle: undefined,
         });
-<<<<<<< HEAD
-      }
-    }, [route.params, navigation]) // Dependencies for useFocusEffect
-  );
-
-  // NEW EFFECT: Process pending navigation route once location is ready
-  useEffect(() => {
-    if (isLocationReady && pendingNavigationRoute) {
-      const { coordinate, title, subtitle } = pendingNavigationRoute;
-
-      // Clear any active routes or modals to prepare for new display
-      stopNavigation();
-      setShowBottomSheet(false);
-      setShowNearestPlaceModal(false);
-
-      // Set the selected location and animate map to it
-      setSelectedLocation({
-        id: `saved-${coordinate.latitude}-${coordinate.longitude}`, // Create a unique ID for saved place
-        title: title || "Saved Place",
-        subtitle: subtitle || "",
-        coordinate: coordinate,
-      });
-
-      mapRef.current?.animateToRegion({
-        latitude: coordinate.latitude,
-        longitude: coordinate.longitude,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      });
-
-      // Pass false to showBottomSheetOnFinish so it doesn't automatically pop up the bottom sheet
-      calculateAndShowRoutes(coordinate, false);
-
-      // Clear the pending route after processing
-      setPendingNavigationRoute(null);
-    }
-  }, [
-    isLocationReady,
-    pendingNavigationRoute,
-    stopNavigation,
-    animateBottomSheet,
-    calculateAndShowRoutes,
-  ]);
-
-=======
         return;
       }
 
@@ -643,7 +474,6 @@ const SafeMaps = () => {
     }, [route.params, navigation]),
   );
 
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
   // Effect to clean up location watcher when component unmounts
   useEffect(() => {
     return () => {
@@ -666,11 +496,7 @@ const SafeMaps = () => {
       if (status !== "granted") {
         Alert.alert(
           "Permission denied",
-<<<<<<< HEAD
-          "Location permission is required to use this app."
-=======
           "Location permission is required to use this app.",
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
         );
         return;
       }
@@ -684,11 +510,7 @@ const SafeMaps = () => {
 
       // Reverse geocode to get current city/region name
       const reverseGeocode = await Location.reverseGeocodeAsync(
-<<<<<<< HEAD
-        currentLocation.coords
-=======
         currentLocation.coords,
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
       );
       if (reverseGeocode && reverseGeocode.length > 0) {
         const { city, region } = reverseGeocode[0];
@@ -714,148 +536,6 @@ const SafeMaps = () => {
     }
   };
 
-<<<<<<< HEAD
-  /**
-   * Loads mock safety review data. In a real application, this would fetch from a backend.
-   */
-  const loadSafetyData = () => {
-    const mockReviews: SafetyReview[] = [
-      // Safe Areas in Bhopal (Rating 4-5)
-      {
-        id: 1,
-        latitude: 23.2548, // Near Upper Lake (Bada Talab) - Boat Club area
-        longitude: 77.3995,
-        rating: 5,
-        comment:
-          "Well-lit and popular area for walks. Feels very safe due to crowds.",
-        category: "general",
-        timestamp: Date.now() - 86400000 * 5, // 5 days ago
-        userId: "bhopal_user1",
-      },
-      {
-        id: 2,
-        latitude: 23.2595, // Near DB City Mall / Zone-I
-        longitude: 77.4126,
-        rating: 4,
-        comment:
-          "Busy commercial hub with good security. Safe during day and evening.",
-        category: "security",
-        timestamp: Date.now() - 86400000 * 3, // 3 days ago
-        userId: "bhopal_user2",
-      },
-      {
-        id: 3,
-        latitude: 23.245, // Near New Market
-        longitude: 77.404,
-        rating: 4,
-        comment:
-          "Crowded market area, active police patrolling. Safe for shopping.",
-        category: "general",
-        timestamp: Date.now() - 86400000 * 7, // 7 days ago
-        userId: "bhopal_user3",
-      },
-      {
-        id: 4,
-        latitude: 23.27, // Near Van Vihar National Park entrance
-        longitude: 77.375,
-        rating: 5,
-        comment:
-          "Protected national park area. Very safe during operational hours. Good for nature walks.",
-        category: "security",
-        timestamp: Date.now() - 86400000 * 2, // 2 days ago
-        userId: "bhopal_user4",
-      },
-      {
-        id: 5,
-        latitude: 23.22, // Near Shahpura Lake
-        longitude: 77.435,
-        rating: 4,
-        comment:
-          "Nice lakeside area, well-maintained. Feels safe with families around.",
-        category: "general",
-        timestamp: Date.now() - 86400000 * 4, // 4 days ago
-        userId: "bhopal_user5",
-      },
-
-      // Caution Areas in Bhopal (Rating 3)
-      {
-        id: 6,
-        latitude: 23.235, // Near Habibganj Railway Station / ISBT area
-        longitude: 77.43,
-        rating: 3,
-        comment:
-          "Busy transport hub. Can be crowded and chaotic. Exercise caution at night.",
-        category: "crowd",
-        timestamp: Date.now() - 86400000 * 1, // 1 day ago
-        userId: "bhopal_user6",
-      },
-      {
-        id: 7,
-        latitude: 23.2681, // Ibrahimganj - based on your previous testing
-        longitude: 77.4049,
-        rating: 3,
-        comment:
-          "Narrow streets, some areas lack proper lighting. Mixed reviews.",
-        category: "lighting",
-        timestamp: Date.now() - 86400000 * 6, // 6 days ago
-        userId: "bhopal_user7",
-      },
-
-      // Dangerous Areas in Bhopal (Rating 1-2)
-      {
-        id: 8,
-        latitude: 23.265, // Example of a less populated street/alley (hypothetical)
-        longitude: 77.408,
-        rating: 2,
-        comment:
-          "Very poor lighting and often deserted after 9 PM. Felt unsafe walking alone.",
-        category: "lighting",
-        timestamp: Date.now() - 86400000 * 0.5, // 12 hours ago
-        userId: "bhopal_user8",
-      },
-      {
-        id: 9,
-        latitude: 23.24, // Another hypothetical isolated spot
-        longitude: 77.39,
-        rating: 1,
-        comment:
-          "Frequent reports of petty crime and harassment. Highly unsafe, avoid this route.",
-        category: "crime",
-        timestamp: Date.now() - 86400000 * 1.5, // 1.5 days ago
-        userId: "bhopal_user9",
-      },
-      {
-        id: 10,
-        latitude: 23.275, // Near a less maintained area (hypothetical)
-        longitude: 77.415,
-        rating: 2,
-        comment:
-          "Broken pavements and overgrown bushes make it feel unsafe, especially at night.",
-        category: "infrastructure",
-        timestamp: Date.now() - 86400000 * 2.5, // 2.5 days ago
-        userId: "bhopal_user10",
-      },
-    ];
-
-    setSafetyReviews(mockReviews);
-
-    // Identify dangerous areas from mock reviews
-    const dangerous = mockReviews
-      .filter((review) => review.rating <= 2)
-      .map((review) => ({
-        latitude: review.latitude,
-        longitude: review.longitude,
-        radius: 500, // Radius for dangerous area visualization
-        severity: review.rating,
-      }));
-
-    setDangerousAreas(dangerous);
-  };
-
-  /**
-   * Submits a new safety review and updates the state.
-   * In a real app, this would send data to a backend.
-=======
   const safetyHeatCells = useMemo(
     () =>
       buildSafetyHeatLayer(
@@ -922,7 +602,6 @@ const SafeMaps = () => {
   /**
    * Submits a community safety review: updates local heat immediately,
    * then persists via Firebase verifyReport (Phase 5).
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
    */
   const submitSafetyReview = useCallback(
     (
@@ -930,11 +609,7 @@ const SafeMaps = () => {
       longitude: number,
       rating: number,
       comment: string,
-<<<<<<< HEAD
-      category: string
-=======
       category: string,
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
     ) => {
       const newReview: SafetyReview = {
         id: Date.now(),
@@ -944,20 +619,12 @@ const SafeMaps = () => {
         comment,
         category,
         timestamp: Date.now(),
-<<<<<<< HEAD
-        userId: "current_user", // Placeholder: Replace with actual user ID
-=======
         userId: "current_user",
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
       };
 
       const updatedReviews = [...safetyReviews, newReview];
       setSafetyReviews(updatedReviews);
 
-<<<<<<< HEAD
-      // Update dangerous areas if the new review indicates danger
-=======
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
       if (rating <= 2) {
         const newDangerousArea: DangerousArea = {
           latitude,
@@ -968,15 +635,6 @@ const SafeMaps = () => {
         setDangerousAreas((prev) => [...prev, newDangerousArea]);
       }
 
-<<<<<<< HEAD
-      Alert.alert(
-        "Review Submitted",
-        "Thank you for helping keep our community safe!"
-      );
-      setShowReviewModal(false);
-    },
-    [safetyReviews]
-=======
       setShowReviewModal(false);
       setReviewLocation(null);
       setReviewPlaceLabel(null);
@@ -1012,7 +670,6 @@ const SafeMaps = () => {
       })();
     },
     [safetyReviews, reviewPlaceLabel],
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
   );
 
   // --- Search Functionality ---
@@ -1028,20 +685,12 @@ const SafeMaps = () => {
       return;
     }
 
-<<<<<<< HEAD
-    setShowLongPressInstruction(false); // Hide instruction when search starts
-=======
     setShowLongPressInstruction(false); // Hide tip if still visible during search
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
 
     if (!GOOGLE_PLACES_API_KEY) {
       Alert.alert(
         "API Key Missing",
-<<<<<<< HEAD
-        "Google Places API key is not configured. Please add it to your app.json extra field."
-=======
         "Google Places API key is not configured. Please add it to your app.json extra field.",
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
       );
       console.error("Google Places API key is missing.");
       return;
@@ -1057,11 +706,7 @@ const SafeMaps = () => {
         : "";
 
       const url = `${PLACE_SEARCH_URL}?query=${encodeURIComponent(
-<<<<<<< HEAD
-        query
-=======
         query,
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
       )}&key=${GOOGLE_PLACES_API_KEY}${locationBias}`;
 
       const response = await fetch(url);
@@ -1092,30 +737,18 @@ const SafeMaps = () => {
         console.error(
           "Google Places API error:",
           data.status,
-<<<<<<< HEAD
-          data.error_message
-        );
-        Alert.alert(
-          "Search Error",
-          `Google Places API Error: ${data.error_message || data.status}`
-=======
           data.error_message,
         );
         Alert.alert(
           "Search Error",
           `Google Places API Error: ${data.error_message || data.status}`,
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
         );
       }
     } catch (error) {
       console.error("Places API fetch error:", error);
       Alert.alert(
         "Search Error",
-<<<<<<< HEAD
-        "Network error or invalid API key. Check console for details."
-=======
         "Network error or invalid API key. Check console for details.",
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
       );
     }
   };
@@ -1195,27 +828,6 @@ const SafeMaps = () => {
 
   /**
    * Calculates distance between two coordinates using Haversine formula.
-<<<<<<< HEAD
-   * @param {Coordinate} origin - {latitude, longitude}
-   * @param {Coordinate} destination - {latitude, longitude}
-   * @returns {number} Distance in kilometers.
-   */
-  const calculateDistance = (
-    origin: Coordinate,
-    destination: Coordinate
-  ): number => {
-    const R = 6371; // Earth's radius in km
-    const deg2rad = (deg: number) => deg * (Math.PI / 180);
-
-    const dLat = deg2rad(destination.latitude - origin.latitude);
-    const dLon = deg2rad(destination.longitude - origin.longitude);
-    const a =
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(deg2rad(origin.latitude)) *
-        Math.cos(deg2rad(destination.latitude)) *
-        Math.sin(dLon / 2) *
-        Math.sin(dLon / 2);
-=======
    * Accepts either {latitude, longitude} or Google Places {lat, lng}.
    * @returns {number} Distance in kilometers, or NaN if coords are invalid.
    */
@@ -1250,7 +862,6 @@ const SafeMaps = () => {
         Math.cos(deg2rad(dLat)) *
         Math.sin(deltaLon / 2) *
         Math.sin(deltaLon / 2);
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
   };
@@ -1267,11 +878,7 @@ const SafeMaps = () => {
       const nearbyReviews = safetyReviews.filter((review) => {
         const distance = calculateDistance(
           { latitude, longitude },
-<<<<<<< HEAD
-          { latitude: review.latitude, longitude: review.longitude }
-=======
           { latitude: review.latitude, longitude: review.longitude },
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
         );
         return distance <= radius / 1000; // Convert radius to km for comparison
       });
@@ -1290,11 +897,7 @@ const SafeMaps = () => {
 
       return { score: avgRating, status, reviews: nearbyReviews };
     },
-<<<<<<< HEAD
-    [safetyReviews]
-=======
     [safetyReviews],
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
   );
 
   /**
@@ -1354,26 +957,6 @@ const SafeMaps = () => {
         },
       };
     },
-<<<<<<< HEAD
-    [getAreaSafetyScore]
-  );
-
-  /**
-   * Returns a color based on the safety status.
-   * @param {string} safetyStatus - 'dangerous', 'caution', 'safe', 'unreviewed'
-   * @returns {string} Hex color code.
-   */
-  const getSafetyColor = (safetyStatus: string): string => {
-    switch (safetyStatus) {
-      case "dangerous":
-        return "#FF4444"; // Red
-      case "caution":
-        return "#FFA500"; // Orange
-      case "safe":
-        return "#4CAF50"; // Green
-      default:
-        return "#2196F3"; // Blue (for unreviewed)
-=======
     [getAreaSafetyScore],
   );
 
@@ -1445,7 +1028,6 @@ const SafeMaps = () => {
     } catch (err) {
       console.warn("SafeRoute API unavailable, falling back to Google:", err);
       return null;
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
     }
   };
 
@@ -1458,20 +1040,12 @@ const SafeMaps = () => {
    */
   const getMultipleGoogleRoutes = async (
     origin: Coordinate,
-<<<<<<< HEAD
-    destination: Coordinate
-=======
     destination: Coordinate,
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
   ): Promise<RouteInfo[]> => {
     if (!GOOGLE_DIRECTIONS_API_KEY) {
       Alert.alert(
         "API Key Missing",
-<<<<<<< HEAD
-        "Google Directions API key is not configured. Please add it to your app.json extra field."
-=======
         "Google Directions API key is not configured. Please add it to your app.json extra field.",
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
       );
       throw new Error("Google Directions API key not found");
     }
@@ -1490,11 +1064,7 @@ const SafeMaps = () => {
         console.warn(
           `Google Directions API error (${pref}):`,
           data.status,
-<<<<<<< HEAD
-          data.error_message
-=======
           data.error_message,
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
         );
         return [];
       }
@@ -1511,29 +1081,6 @@ const SafeMaps = () => {
     allGoogleRoutes.push(...(await fetchRoute("avoid=tolls")));
 
     // Process and remove duplicates
-<<<<<<< HEAD
-    const processedRoutes: RouteInfo[] = allGoogleRoutes.map((route, index) => {
-      const leg = route.legs[0];
-      const coordinates = decodePolyline(route.overview_polyline.points);
-      const directions = leg.steps.map((step: any) => ({
-        instruction: step.html_instructions.replace(/<[^>]*>/g, ""),
-        distance: step.distance.text,
-        duration: step.duration.text,
-      }));
-
-      return {
-        id: `route-${Date.now()}-${index}`,
-        coordinates,
-        distance: leg.distance.value / 1000, // in km
-        duration: Math.round(leg.duration.value / 60), // in minutes
-        description: `${leg.distance.text} • ${leg.duration.text}`,
-        directions,
-      } as RouteInfo; // Cast to RouteInfo
-    });
-
-    // Remove duplicate routes based on proximity of distance and duration
-    const uniqueRoutes: RouteInfo[] = [];
-=======
     const processedRoutes: RouteDraft[] = allGoogleRoutes.map(
       (route, index) => {
         const leg = route.legs[0];
@@ -1555,7 +1102,6 @@ const SafeMaps = () => {
 
     // Remove duplicate routes based on proximity of distance and duration
     const uniqueRoutes: RouteDraft[] = [];
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
     for (const route of processedRoutes) {
       const isDuplicate = uniqueRoutes.some((existing) => {
         const distanceDiff = Math.abs(existing.distance - route.distance);
@@ -1567,35 +1113,6 @@ const SafeMaps = () => {
       }
     }
 
-<<<<<<< HEAD
-    // Analyze safety for all unique routes
-    const routesWithSafety = uniqueRoutes.map((route, index) => {
-      const safetyAnalysis = analyzeRouteSafety(route.coordinates);
-      return {
-        ...route,
-        safety: safetyAnalysis,
-        color: getSafetyColor(safetyAnalysis.overall),
-        title: index === 0 ? "Primary Route" : `Alternative Route ${index + 1}`,
-      };
-    });
-
-    // Sort routes: safest first, then shortest duration
-    routesWithSafety.sort((a, b) => {
-      const safetyPriority: { [key: string]: number } = {
-        safe: 4,
-        unreviewed: 3,
-        caution: 2,
-        dangerous: 1,
-      };
-      const aSafety = safetyPriority[a.safety.overall];
-      const bSafety = safetyPriority[b.safety.overall];
-
-      if (aSafety !== bSafety) return bSafety - aSafety; // Prioritize higher safety score
-      return a.duration - b.duration; // Then prioritize shorter duration
-    });
-
-    return routesWithSafety;
-=======
     const now = new Date();
     const scorePoint = (latitude: number, longitude: number) => {
       const area = getAreaSafetyScore(latitude, longitude, 200);
@@ -1705,7 +1222,6 @@ const SafeMaps = () => {
         title: route.title || `${ROUTE_KIND_LABELS[mode]} Route`,
       };
     });
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
   };
 
   /**
@@ -1716,11 +1232,7 @@ const SafeMaps = () => {
    */
   const calculateAndShowRoutes = async (
     destinationCoord: Coordinate,
-<<<<<<< HEAD
-    showBottomSheetOnFinish: boolean = true
-=======
     showBottomSheetOnFinish: boolean = true,
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
   ) => {
     if (!location) {
       Alert.alert("Error", "Please get your current location first.");
@@ -1751,15 +1263,6 @@ const SafeMaps = () => {
     }
 
     try {
-<<<<<<< HEAD
-      const routes = await getMultipleGoogleRoutes(
-        {
-          latitude: location.coords.latitude,
-          longitude: location.coords.longitude,
-        },
-        destinationCoord
-      );
-=======
       const origin = {
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
@@ -1768,48 +1271,31 @@ const SafeMaps = () => {
       let routes =
         (await getSafeBackendRoutes(origin, destinationCoord)) ||
         (await getMultipleGoogleRoutes(origin, destinationCoord));
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
 
       if (!routes || routes.length === 0) {
         Alert.alert(
           "No Routes Found",
-<<<<<<< HEAD
-          "Could not calculate any routes between the selected locations."
-=======
           "Could not calculate any routes between the selected locations.",
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
         );
         return;
       }
 
       setRouteOptions(routes);
 
-<<<<<<< HEAD
-      let selectedRoute = routes[0]; // Default to the first (safest/shortest) route
-=======
       let selectedRoute = routes[0];
       const balanced = routes.find((r) => r.mode === "balanced");
       if (balanced) selectedRoute = balanced;
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
 
       // If "safeRouteOnly" is enabled and the best route is dangerous, try to find an alternative.
       if (safeRouteOnly && selectedRoute.safety.overall === "dangerous") {
         const saferAlternative = routes.find(
-<<<<<<< HEAD
-          (r) => r.safety.overall !== "dangerous"
-=======
           (r) => r.safety.overall !== "dangerous",
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
         );
         if (saferAlternative) {
           selectedRoute = saferAlternative;
           Alert.alert(
             "Safer Route Found",
-<<<<<<< HEAD
-            "The primary route passes through unsafe areas. A safer alternative has been selected for you."
-=======
             "The primary route passes through unsafe areas. A safer alternative has been selected for you.",
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
           );
         } else {
           Alert.alert(
@@ -1825,11 +1311,7 @@ const SafeMaps = () => {
                 },
                 style: "cancel",
               },
-<<<<<<< HEAD
-            ]
-=======
             ],
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
           );
         }
       }
@@ -1850,11 +1332,7 @@ const SafeMaps = () => {
       console.error("Route calculation error:", error);
       Alert.alert(
         "Route Error",
-<<<<<<< HEAD
-        "Could not calculate routes. Please check your internet connection or try again later."
-=======
         "Could not calculate routes. Please check your internet connection or try again later.",
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
       );
     } finally {
       setIsCalculatingRoute(false);
@@ -1866,50 +1344,26 @@ const SafeMaps = () => {
   };
 
   /**
-<<<<<<< HEAD
-   * Function to fetch nearby places (police or hospital) using Google Places Nearby Search API.
-   * @param {string} placeType - 'police' or 'hospital'
-=======
    * Fetch nearby police/hospital, pick the true nearest by distance (not prominence).
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
    */
   const getNearbyPlaces = async (placeType: string) => {
     if (!location) {
       Alert.alert(
         "Location Error",
-<<<<<<< HEAD
-        "Cannot find nearby places without your current location."
-=======
         "Cannot find nearby places without your current location.",
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
       );
       return;
     }
     if (!GOOGLE_PLACES_API_KEY) {
       Alert.alert(
         "API Key Missing",
-<<<<<<< HEAD
-        "Google Places API key is not configured."
-=======
         "Google Places API key is not configured.",
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
       );
       console.error("Google Places API key is missing.");
       return;
     }
 
     setIsLoadingNearby(true);
-<<<<<<< HEAD
-    setNearbyPoliceStations([]); // Clear all nearby markers initially
-    setNearbyHospitals([]); // Clear all nearby markers initially
-    setNearestPlaceDetails(null); // Clear previous nearest place details
-
-    try {
-      const NEARBY_SEARCH_URL =
-        "https://maps.googleapis.com/maps/api/place/nearbysearch/json";
-      const radius = 50000; // Search within 50 km radius (adjust as needed)
-      const url = `${NEARBY_SEARCH_URL}?location=${location.coords.latitude},${location.coords.longitude}&radius=${radius}&type=${placeType}&key=${GOOGLE_PLACES_API_KEY}`;
-=======
     setNearbyPoliceStations([]);
     setNearbyHospitals([]);
     setNearestPlaceDetails(null);
@@ -1927,96 +1381,20 @@ const SafeMaps = () => {
         `https://maps.googleapis.com/maps/api/place/nearbysearch/json` +
         `?location=${origin.latitude},${origin.longitude}` +
         `&rankby=distance&type=${placeType}&key=${GOOGLE_PLACES_API_KEY}`;
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
 
       const response = await fetch(url);
       const data = await response.json();
 
-<<<<<<< HEAD
-      if (data.status === "OK") {
-        const nearestPlaceFromAPI = data.results[0]; // Take the first result as the nearest
-
-        if (nearestPlaceFromAPI) {
-          const formattedNearest: SearchResult & {
-            distance: number;
-            type: string;
-          } = {
-            id: nearestPlaceFromAPI.place_id,
-            title: nearestPlaceFromAPI.name,
-            subtitle:
-              nearestPlaceFromAPI.vicinity ||
-              nearestPlaceFromAPI.formatted_address,
-            coordinate: {
-              latitude: nearestPlaceFromAPI.geometry.location.lat,
-              longitude: nearestPlaceFromAPI.geometry.location.lng,
-            },
-            // Calculate distance for display in modal, using Haversine
-            distance: calculateDistance(
-              location.coords,
-              nearestPlaceFromAPI.geometry.location
-            ),
-            type: placeType, // Add type for modal display
-          };
-
-          // Set only the nearest place to the respective state for map markers
-          if (placeType === "police") {
-            setNearbyPoliceStations([formattedNearest]);
-          } else if (placeType === "hospital") {
-            setNearbyHospitals([formattedNearest]);
-          }
-
-          setNearestPlaceDetails(formattedNearest); // Store details for confirmation modal
-          setShowNearestPlaceModal(true); // Show the confirmation modal
-
-          // Fit map to this single nearest marker and current location
-          if (mapRef.current) {
-            mapRef.current.fitToCoordinates(
-              [formattedNearest.coordinate, location.coords],
-              {
-                edgePadding: { top: 100, right: 50, bottom: 300, left: 50 },
-                animated: true,
-              }
-            );
-          }
-        } else {
-          Alert.alert(
-            `No ${
-              placeType === "police" ? "Police Stations" : "Hospitals"
-            } Found`,
-            `Could not find any ${
-              placeType === "police" ? "police stations" : "hospitals"
-            } within 50 km.`
-          );
-        }
-      } else if (data.status === "ZERO_RESULTS") {
-        Alert.alert(
-          `No ${
-            placeType === "police" ? "Police Stations" : "Hospitals"
-          } Found`,
-          `Could not find any ${
-            placeType === "police" ? "police stations" : "hospitals"
-          } within 50 km.`
-        );
-      } else {
-        console.error(
-          `Google Places Nearby Search error for ${placeType}:`,
-          data.status,
-          data.error_message
-=======
       if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
         console.error(
           `Google Places Nearby Search error for ${placeType}:`,
           data.status,
           data.error_message,
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
         );
         Alert.alert(
           "Nearby Search Error",
           `Could not fetch ${placeType} locations. Error: ${
             data.error_message || data.status
-<<<<<<< HEAD
-          }`
-=======
           }`,
         );
         return;
@@ -2087,18 +1465,13 @@ const SafeMaps = () => {
             edgePadding: { top: 100, right: 50, bottom: 300, left: 50 },
             animated: true,
           },
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
         );
       }
     } catch (error) {
       console.error(`Error fetching nearby ${placeType}:`, error);
       Alert.alert(
         "Network Error",
-<<<<<<< HEAD
-        `Failed to fetch nearby ${placeType}. Check your internet connection.`
-=======
         `Failed to fetch nearby ${placeType}. Check your internet connection.`,
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
       );
     } finally {
       setIsLoadingNearby(false);
@@ -2118,48 +1491,12 @@ const SafeMaps = () => {
   };
 
   /**
-<<<<<<< HEAD
-   * Initiates actual navigation mode. This is called from RouteOptionsDisplay.
-=======
    * Initiates actual navigation mode with live turn-by-turn + camera follow.
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
    */
   const startActualNavigation = async () => {
     if (!routeInfo || !routeCoordinates.length || !location) {
       Alert.alert(
         "Error",
-<<<<<<< HEAD
-        "No route selected or current location unavailable to start navigation."
-      );
-      return;
-    }
-    setIsNavigationMode(true);
-
-    // Start watching user's position
-    try {
-      const watcher = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.High,
-          timeInterval: 1000, // Update every 1 second
-          distanceInterval: 10, // Update every 10 meters
-        },
-        (newLocation) => {
-          if (mapRef.current && newLocation.coords) {
-            mapRef.current.animateCamera(
-              {
-                center: {
-                  latitude: newLocation.coords.latitude,
-                  longitude: newLocation.coords.longitude,
-                },
-                // Removed zoom and heading for initial debugging, can add back later
-                // zoom: 16, // Keep a consistent zoom level during navigation
-                // heading: newLocation.coords.heading || 0, // Orient map to user's direction
-              },
-              { duration: 500 }
-            ); // Smooth animation
-          }
-        }
-=======
         "No route selected or current location unavailable to start navigation.",
       );
       return;
@@ -2321,18 +1658,13 @@ const SafeMaps = () => {
             ]);
           }
         },
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
       );
       setLocationWatcher(watcher);
     } catch (error) {
       console.error("Error starting location watcher:", error);
       Alert.alert(
         "Navigation Error",
-<<<<<<< HEAD
-        "Could not start live navigation. Please check location permissions."
-=======
         "Could not start live navigation. Please check location permissions.",
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
       );
     }
   };
@@ -2341,9 +1673,6 @@ const SafeMaps = () => {
    * Stops the current navigation.
    */
   const stopNavigation = () => {
-<<<<<<< HEAD
-    setIsNavigationMode(false);
-=======
     const sharingSession = navShareSessionRef.current;
     navShareSessionRef.current = "";
     if (sharingSession) {
@@ -2358,44 +1687,21 @@ const SafeMaps = () => {
     setLiveNav(null);
     navStepIndexRef.current = 0;
     arrivedAlertedRef.current = false;
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
     setRouteCoordinates([]);
     setRouteInfo(null);
     setDirections([]);
     setRouteOptions([]);
     setSelectedRouteIndex(0);
-<<<<<<< HEAD
-    setNearbyPoliceStations([]); // Clear nearby markers on stop navigation
-    setNearbyHospitals([]); // Clear nearby markers on stop navigation
-    setNearestPlaceDetails(null); // Clear nearest place details on stop navigation
-    setShowNearestPlaceModal(false); // Ensure modal is closed
-
-    // Stop location watcher if active
-=======
     setNearbyPoliceStations([]);
     setNearbyHospitals([]);
     setNearestPlaceDetails(null);
     setShowNearestPlaceModal(false);
 
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
     if (locationWatcher) {
       locationWatcher.remove();
       setLocationWatcher(null);
     }
 
-<<<<<<< HEAD
-    // Optionally, reset map to current location after stopping navigation
-    if (location) {
-      mapRef.current?.animateToRegion({
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude,
-        latitudeDelta: 0.0922,
-        longitudeDelta: 0.0421,
-      });
-    }
-  };
-
-=======
     if (location) {
       mapRef.current?.animateCamera(
         {
@@ -2435,7 +1741,6 @@ const SafeMaps = () => {
     }
   }, [isLocationReady, pendingNavigationRoute]);
 
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
   /**
    * Selects a different route option from the available list.
    * @param {number} routeIndex - The index of the selected route in routeOptions array.
@@ -2445,12 +1750,6 @@ const SafeMaps = () => {
     if (!newSelectedRoute) return;
 
     setSelectedRouteIndex(routeIndex);
-<<<<<<< HEAD
-    setRouteCoordinates(newSelectedRoute.coordinates);
-    setRouteInfo(newSelectedRoute);
-    setDirections(newSelectedRoute.directions || []);
-
-=======
     // Clear first so react-native-maps drops the previous polyline before drawing the next.
     setRouteCoordinates([]);
     setRouteInfo(newSelectedRoute);
@@ -2466,26 +1765,13 @@ const SafeMaps = () => {
       }
     });
 
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
     if (newSelectedRoute.safety?.overall === "dangerous") {
       Alert.alert(
         "Safety Warning",
         "This route passes through areas reported as unsafe. Please consider an alternative route or travel during daylight hours.",
-<<<<<<< HEAD
-        [{ text: "Understood", style: "default" }]
-      );
-    }
-
-    // Fit map to new selected route
-    mapRef.current?.fitToCoordinates(newSelectedRoute.coordinates, {
-      edgePadding: { top: 100, right: 50, bottom: 300, left: 50 },
-      animated: true,
-    });
-=======
         [{ text: "Understood", style: "default" }],
       );
     }
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
   };
 
   /**
@@ -2509,11 +1795,7 @@ const SafeMaps = () => {
       if (exists) {
         Alert.alert(
           "Location Already Saved",
-<<<<<<< HEAD
-          `${loc.title} is already in your saved places.`
-=======
           `${loc.title} is already in your saved places.`,
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
         );
         return;
       }
@@ -2522,19 +1804,11 @@ const SafeMaps = () => {
       const newSavedLocations = [...savedLocations, loc];
       await AsyncStorage.setItem(
         "savedLocations",
-<<<<<<< HEAD
-        JSON.stringify(newSavedLocations)
-      );
-      Alert.alert(
-        "Location Saved",
-        `${loc.title} has been added to your saved places!`
-=======
         JSON.stringify(newSavedLocations),
       );
       Alert.alert(
         "Location Saved",
         `${loc.title} has been added to your saved places!`,
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
       );
     } catch (error) {
       console.error("Error saving location:", error);
@@ -2568,11 +1842,7 @@ View on Map: https://www.google.com/maps/search/?api=1&query=${loc.coordinate.la
       // Handle potential errors during sharing (e.g., user cancels share)
       Alert.alert(
         "Error Sharing",
-<<<<<<< HEAD
-        error.message || "Failed to share location."
-=======
         error.message || "Failed to share location.",
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
       );
       console.error("Error sharing location:", error);
     }
@@ -2595,37 +1865,6 @@ View on Map: https://www.google.com/maps/search/?api=1&query=${loc.coordinate.la
 
   return (
     <>
-<<<<<<< HEAD
-      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
-      <SafeAreaView style={GlobalStyles.container}>
-        {/* Search Bar Component */}
-        <SearchBar
-          searchQuery={searchQuery}
-          setSearchQuery={setSearchQuery}
-          searchResults={searchResults}
-          showSearchResults={showSearchResults}
-          onSearch={searchPlaces}
-          onSelectResult={selectSearchResult}
-          onClearSearch={() => {
-            setSearchQuery("");
-            setShowSearchResults(false);
-          }}
-        />
-
-        {/* NEW: Menu Button to Saved Places Screen */}
-        <View style={styles.menuButtonContainer}>
-          <TouchableOpacity
-            style={styles.menuButton}
-            onPress={() => navigation.navigate("SavedPlacesScreen")} // Changed to 'SavedPlacesScreen' as per RootLayout.tsx
-          >
-            <MaterialIcons
-              name="bookmark"
-              size={24}
-              color={GlobalStyles.colors.primary}
-            />
-          </TouchableOpacity>
-        </View>
-=======
       <StatusBar
         barStyle={isDark || isNavigationMode ? "light-content" : "dark-content"}
         backgroundColor={
@@ -2654,7 +1893,6 @@ View on Map: https://www.google.com/maps/search/?api=1&query=${loc.coordinate.la
             onBookmarkPress={() => navigation.navigate("SavedPlacesScreen")}
           />
         ) : null}
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
 
         {/* Map Display Component */}
         <MapDisplay
@@ -2663,14 +1901,6 @@ View on Map: https://www.google.com/maps/search/?api=1&query=${loc.coordinate.la
           selectedLocation={selectedLocation}
           safetyReviews={safetyReviews}
           dangerousAreas={dangerousAreas}
-<<<<<<< HEAD
-          routeCoordinates={routeCoordinates}
-          routeColor={routeInfo?.color || "#2196F3"} // Use routeInfo color if available
-          onLongPress={(event: any) => {
-            setReviewLocation(event.nativeEvent.coordinate);
-            setShowReviewModal(true);
-            setShowLongPressInstruction(false); // Hide instruction on long press
-=======
           safetyHeatCells={safetyHeatCells as any}
           reviewDetailPins={reviewDetailPins as any}
           reviewDraftCoordinate={
@@ -2731,15 +1961,11 @@ View on Map: https://www.google.com/maps/search/?api=1&query=${loc.coordinate.la
             ) {
               setMapRegion(region);
             }
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
           }}
           onMyLocationPress={getCurrentLocation}
           nearbyPoliceStations={nearbyPoliceStations}
           nearbyHospitals={nearbyHospitals}
-<<<<<<< HEAD
-=======
           showLocationButton={false}
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
         />
 
         {/* Loading Overlay for route calculation or nearby search */}
@@ -2755,47 +1981,6 @@ View on Map: https://www.google.com/maps/search/?api=1&query=${loc.coordinate.la
           }
         />
 
-<<<<<<< HEAD
-        {/* Navigation Header Component (visible when in navigation mode) */}
-        <NavigationHeader
-          isVisible={isNavigationMode && routeInfo}
-          routeInfo={routeInfo}
-          onStopNavigation={stopNavigation}
-        />
-
-        {/* Route Options Display Component (visible after route calculation, before navigation) */}
-        <RouteOptionsDisplay
-          isVisible={routeOptions.length > 0 && !isNavigationMode}
-          routeOptions={routeOptions}
-          selectedRouteIndex={selectedRouteIndex}
-          onSelectRoute={selectRouteOption}
-          onViewDirections={() => setShowDirectionsModal(true)}
-          onStartNavigation={startActualNavigation}
-          onRecalculateRoute={
-            () =>
-              selectedLocation &&
-              calculateAndShowRoutes(selectedLocation.coordinate, true) // Show bottom sheet after recalculate
-          }
-          safeRouteOnly={safeRouteOnly}
-          onToggleSafeRouteOnly={() => setSafeRouteOnly((prev) => !prev)}
-        />
-
-        {/* Bottom Sheet for selected location details and actions */}
-        <BottomSheet
-          showBottomSheet={showBottomSheet}
-          bottomSheetAnim={bottomSheetAnim}
-          selectedLocation={selectedLocation}
-          onStartNavigation={() => {
-            // MODIFIED: Explicitly close bottom sheet here
-            animateBottomSheet(false); // Close the bottom sheet immediately
-            if (selectedLocation) {
-              calculateAndShowRoutes(selectedLocation.coordinate, false); // Do not show bottom sheet again after route calculation
-            }
-          }}
-          onSaveLocation={handleSaveLocation} // Pass the save function
-          onShareLocation={() => handleShareLocation(selectedLocation)} // Pass the share function
-          onClose={() => animateBottomSheet(false)}
-=======
         {/* Live Navigation HUD — full-screen map chrome */}
         <LiveNavigationHUD
           visible={Boolean(isNavigationMode && routeInfo)}
@@ -2930,17 +2115,12 @@ View on Map: https://www.google.com/maps/search/?api=1&query=${loc.coordinate.la
               );
             }
           }}
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
         />
 
         {/* Safety Review Modal Component */}
         <SafetyReviewModal
           showReviewModal={showReviewModal}
           reviewLocation={reviewLocation}
-<<<<<<< HEAD
-          onSubmit={submitSafetyReview}
-          onClose={() => setShowReviewModal(false)}
-=======
           reviewPlaceLabel={reviewPlaceLabel}
           reviewPlaceSubtitle={reviewPlaceSubtitle}
           onLocationChange={(next: {
@@ -2972,7 +2152,6 @@ View on Map: https://www.google.com/maps/search/?api=1&query=${loc.coordinate.la
             setReviewPlaceLabel(null);
             setReviewPlaceSubtitle(null);
           }}
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
         />
 
         {/* Directions Modal Component */}
@@ -2986,13 +2165,9 @@ View on Map: https://www.google.com/maps/search/?api=1&query=${loc.coordinate.la
         {/* Long Press Instruction Overlay */}
         <LongPressInstruction
           isVisible={showLongPressInstruction}
-<<<<<<< HEAD
-          onClose={() => setShowLongPressInstruction(false)}
-=======
           onClose={() => {
             void dismissLongPressTip();
           }}
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
         />
 
         {/* Nearest Place Confirmation Modal Component */}
@@ -3012,25 +2187,4 @@ View on Map: https://www.google.com/maps/search/?api=1&query=${loc.coordinate.la
   );
 };
 
-<<<<<<< HEAD
-const styles = StyleSheet.create({
-  menuButtonContainer: {
-    position: "absolute",
-    top: Platform.OS === "ios" ? 50 : 100,
-    right: 15,
-    zIndex: 11,
-  },
-  menuButton: {
-    backgroundColor: "white",
-    borderRadius: 24,
-    width: 48,
-    height: 48,
-    justifyContent: "center",
-    alignItems: "center",
-    ...GlobalStyles.shadow,
-  },
-});
-
-=======
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
 export default SafeMaps;

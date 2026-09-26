@@ -19,18 +19,6 @@ const firebaseConfig = {
   measurementId: process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID,
 };
 
-<<<<<<< HEAD
-let app;
-if (getApps().length === 0) {
-  app = initializeApp(firebaseConfig);
-} else {
-  app = getApps()[0];
-}
-
-const auth = getAuth(app);
-
-export { app, auth };
-=======
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
 /**
@@ -54,5 +42,4 @@ const functions = getFunctions(app);
 const storage = getStorage(app);
 
 export { app, auth, db, functions, storage };
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
 export default app;

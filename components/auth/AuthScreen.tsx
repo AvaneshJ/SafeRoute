@@ -2,7 +2,6 @@ import {
   AuthTextField,
   PrimaryButton,
   SafeRouteMark,
-  SegmentedControl,
   SocialButton,
   type FieldStatus,
 } from "@/components/design-system";
@@ -40,7 +39,6 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 export type AuthMode = "signup" | "login";
-export type AuthMethod = "phone" | "email";
 
 type FieldState = {
   value: string;
@@ -60,7 +58,6 @@ function digitsOnly(value: string): string {
 
 function normalizePhone(value: string): string {
   const digits = digitsOnly(value);
-  // Strip common India country code if user typed it
   if (digits.length === 12 && digits.startsWith("91")) return digits.slice(2);
   if (digits.length === 11 && digits.startsWith("0")) return digits.slice(1);
   return digits;
@@ -83,22 +80,20 @@ export function AuthScreen({ initialMode = "signup" }: AuthScreenProps) {
   const { user, ready, bootstrapRoute } = useAuth();
 
   const [mode, setMode] = useState<AuthMode>(initialMode);
-  const [method, setMethod] = useState<AuthMethod>("email");
   const [name, setName] = useState<FieldState>(emptyField);
   const [email, setEmail] = useState<FieldState>(emptyField);
   const [phone, setPhone] = useState<FieldState>(emptyField);
   const [password, setPassword] = useState<FieldState>(emptyField);
   const [confirm, setConfirm] = useState<FieldState>(emptyField);
   const [loading, setLoading] = useState(false);
-  const [socialLoading, setSocialLoading] = useState<"google" | "apple" | null>(
-    null,
-  );
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   const isSignup = mode === "signup";
 
   const emailValid = EMAIL_RE.test(email.value.trim());
   const phoneDigits = normalizePhone(phone.value);
-  const phoneValid = PHONE_RE.test(phoneDigits);
+  const phoneEntered = phoneDigits.length > 0;
+  const phoneValid = !phoneEntered || PHONE_RE.test(phoneDigits);
   const passwordValid = password.value.length >= 6;
   const confirmValid =
     confirm.value.length > 0 && confirm.value === password.value;
@@ -131,23 +126,13 @@ export function AuthScreen({ initialMode = "signup" }: AuthScreenProps) {
     }
 
     if (!email.value.trim()) {
-      fail(
-        setEmail,
-        email,
-        method === "phone" && !isSignup
-          ? "Add the email linked to this number to sign in"
-          : method === "phone"
-            ? "Email is required for your account"
-            : "Email is required",
-      );
+      fail(setEmail, email, "Email is required");
     } else if (!emailValid) {
       fail(setEmail, email, "Enter a valid email");
     }
 
-    if (method === "phone") {
-      if (!phoneDigits) fail(setPhone, phone, "Phone number is required");
-      else if (!phoneValid)
-        fail(setPhone, phone, "Enter a valid 10-digit mobile number");
+    if (isSignup && phoneEntered && !PHONE_RE.test(phoneDigits)) {
+      fail(setPhone, phone, "Enter a valid 10-digit mobile number");
     }
 
     if (!password.value) fail(setPassword, password, "Password is required");
@@ -179,12 +164,14 @@ export function AuthScreen({ initialMode = "signup" }: AuthScreenProps) {
         await updateProfile(cred.user, {
           displayName,
         });
+        if (phoneEntered) {
+          await AsyncStorage.setItem(SIGNUP_PHONE_KEY, phoneDigits);
+        } else {
+          await AsyncStorage.removeItem(SIGNUP_PHONE_KEY);
+        }
         // Profile/push must not block auth navigation (Firestore/FCM can hang).
         void ensureUserProfile().catch(console.warn);
         void registerPushToken().catch(console.warn);
-        if (method === "phone" && phoneDigits) {
-          await AsyncStorage.setItem(SIGNUP_PHONE_KEY, phoneDigits);
-        }
         const pendingInvite = await AsyncStorage.getItem(
           "@SafeRoute:pendingGuardianInvite",
         );
@@ -208,7 +195,6 @@ export function AuthScreen({ initialMode = "signup" }: AuthScreenProps) {
           email.value.trim(),
           password.value,
         );
-        // Profile/push must not block auth navigation (Firestore/FCM can hang).
         void ensureUserProfile().catch(console.warn);
         void registerPushToken().catch(console.warn);
         const pendingInvite = await AsyncStorage.getItem(
@@ -248,13 +234,13 @@ export function AuthScreen({ initialMode = "signup" }: AuthScreenProps) {
     }
   };
 
-  const onSocial = (provider: "google" | "apple") => {
-    setSocialLoading(provider);
+  const onGoogle = () => {
+    setGoogleLoading(true);
     Alert.alert(
-      provider === "google" ? "Google" : "Apple",
-      `${provider === "google" ? "Google" : "Apple"} Sign-In will activate once OAuth credentials are added to this project.`,
+      "Google",
+      "Google Sign-In will activate once OAuth credentials are added to this project.",
     );
-    setSocialLoading(null);
+    setGoogleLoading(false);
   };
 
   const openLegal = async (kind: "privacy" | "terms") => {
@@ -269,12 +255,6 @@ export function AuthScreen({ initialMode = "signup" }: AuthScreenProps) {
     }
   };
 
-  const showName = isSignup;
-  const showConfirm = isSignup;
-  // Email always required for Firebase auth; phone only on Phone tab (+91 format)
-  const showEmail = true;
-  const showPhone = method === "phone";
-
   const modeSwitcher = useMemo(
     () =>
       isSignup ? (
@@ -285,6 +265,7 @@ export function AuthScreen({ initialMode = "signup" }: AuthScreenProps) {
             onPress={() => {
               setMode("login");
               setConfirm(emptyField());
+              setPhone(emptyField());
             }}
             accessibilityRole="link"
           >
@@ -353,18 +334,8 @@ export function AuthScreen({ initialMode = "signup" }: AuthScreenProps) {
             {subtitle}
           </Text>
 
-          <SegmentedControl
-            options={[
-              { value: "phone", label: "Phone", icon: "phone-iphone" },
-              { value: "email", label: "Email", icon: "mail-outline" },
-            ]}
-            value={method}
-            onChange={setMethod}
-            style={styles.segment}
-          />
-
           <View style={styles.form}>
-            {showName ? (
+            {isSignup ? (
               <AuthTextField
                 label="Name"
                 value={name.value}
@@ -383,20 +354,43 @@ export function AuthScreen({ initialMode = "signup" }: AuthScreenProps) {
               />
             ) : null}
 
-            {showPhone ? (
+            <AuthTextField
+              label="Email"
+              value={email.value}
+              onChangeText={update(setEmail)}
+              status={statusFor(email, emailValid)}
+              helperText={
+                email.error ||
+                (statusFor(email, emailValid) === "success"
+                  ? "Valid email"
+                  : undefined)
+              }
+              leadingIcon="mail-outline"
+              autoCapitalize="none"
+              keyboardType="email-address"
+              textContentType="emailAddress"
+              autoComplete="email"
+              returnKeyType="next"
+            />
+
+            {isSignup ? (
               <AuthTextField
-                label="Phone"
+                label="Phone (optional)"
                 value={phone.value}
                 onChangeText={(text) => {
                   const next = normalizePhone(text).slice(0, 10);
                   setPhone({ value: next, error: "", touched: true });
                 }}
-                status={statusFor(phone, phoneValid)}
+                status={
+                  phoneEntered
+                    ? statusFor(phone, PHONE_RE.test(phoneDigits))
+                    : "default"
+                }
                 helperText={
                   phone.error ||
-                  (statusFor(phone, phoneValid) === "success"
-                    ? "Valid number"
-                    : "10-digit mobile number")
+                  (phoneEntered && PHONE_RE.test(phoneDigits)
+                    ? "Used for SOS and guardian alerts"
+                    : "Optional — for SOS and guardian SMS")
                 }
                 leadingIcon="phone-iphone"
                 prefix="+91"
@@ -404,29 +398,6 @@ export function AuthScreen({ initialMode = "signup" }: AuthScreenProps) {
                 textContentType="telephoneNumber"
                 autoComplete="tel"
                 maxLength={10}
-                returnKeyType="next"
-              />
-            ) : null}
-
-            {showEmail ? (
-              <AuthTextField
-                label="Email"
-                value={email.value}
-                onChangeText={update(setEmail)}
-                status={statusFor(email, emailValid)}
-                helperText={
-                  email.error ||
-                  (statusFor(email, emailValid) === "success"
-                    ? "Valid email"
-                    : method === "phone"
-                      ? "Email for your SafeRoute account"
-                      : undefined)
-                }
-                leadingIcon="mail-outline"
-                autoCapitalize="none"
-                keyboardType="email-address"
-                textContentType="emailAddress"
-                autoComplete="email"
                 returnKeyType="next"
               />
             ) : null}
@@ -445,10 +416,10 @@ export function AuthScreen({ initialMode = "signup" }: AuthScreenProps) {
               password
               leadingIcon="lock-outline"
               textContentType={isSignup ? "newPassword" : "password"}
-              returnKeyType={showConfirm ? "next" : "done"}
+              returnKeyType={isSignup ? "next" : "done"}
             />
 
-            {showConfirm ? (
+            {isSignup ? (
               <AuthTextField
                 label="Confirm Password"
                 value={confirm.value}
@@ -488,18 +459,11 @@ export function AuthScreen({ initialMode = "signup" }: AuthScreenProps) {
             <View style={[styles.dividerLine, { backgroundColor: c.border }]} />
           </View>
 
-          <View style={styles.social}>
-            <SocialButton
-              provider="google"
-              loading={socialLoading === "google"}
-              onPress={() => onSocial("google")}
-            />
-            <SocialButton
-              provider="apple"
-              loading={socialLoading === "apple"}
-              onPress={() => onSocial("apple")}
-            />
-          </View>
+          <SocialButton
+            provider="google"
+            loading={googleLoading}
+            onPress={onGoogle}
+          />
 
           {modeSwitcher}
 
@@ -575,9 +539,6 @@ const styles = StyleSheet.create({
     lineHeight: typography.lineHeight.bodyLarge,
     marginBottom: spacing.xl,
   },
-  segment: {
-    marginBottom: spacing.xl,
-  },
   form: {
     gap: spacing.md,
   },
@@ -597,9 +558,6 @@ const styles = StyleSheet.create({
   dividerText: {
     fontFamily: typography.fontFamily.medium,
     fontSize: typography.size.caption,
-  },
-  social: {
-    gap: spacing.sm + 4,
   },
   switchText: {
     marginTop: spacing.xl,

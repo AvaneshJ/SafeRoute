@@ -1,0 +1,16 @@
+{
+  "hazards": [
+    {
+      "hazard_id": "c55a6bed-fb1",
+      "latitude": 19.1,
+      "longitude": 72.84,
+      "category": "harassment",
+      "severity": 5,
+      "note": "test harassment",
+      "created_at_ms": 1790407079131,
+      "verified": true,
+      "radius_m": 180.0,
+      "weight": 1.0
+    }
+  ]
+}

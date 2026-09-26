@@ -1,6 +1,3 @@
-<<<<<<< HEAD
-import { useColorScheme } from "@/hooks/useColorScheme";
-=======
 import { paperThemeFor } from "@/constants/paperTheme";
 import { darkColors, lightColors } from "@/constants/theme";
 import { AlertsBadgeProvider } from "@/hooks/useAlertsBadge";
@@ -15,25 +12,10 @@ import {
   Inter_600SemiBold,
   Inter_700Bold,
 } from "@expo-google-fonts/inter";
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
 import {
   DarkTheme,
   DefaultTheme,
   ThemeProvider,
-<<<<<<< HEAD
-} from "@react-navigation/native";
-import { useFonts } from "expo-font";
-import { SplashScreen, Stack } from "expo-router";
-import { useEffect } from "react";
-import { Provider as PaperProvider } from "react-native-paper";
-import { SafeAreaProvider } from "react-native-safe-area-context";
-SplashScreen.preventAutoHideAsync();
-
-export default function RootLayout() {
-  const colorScheme = useColorScheme();
-  const [fontsLoaded, error] = useFonts({
-    "Roboto-Mono": require("../assets/fonts/SpaceMono-Regular.ttf"),
-=======
 } from "expo-router/react-navigation";
 import type { Theme } from "@react-navigation/native";
 import { useFonts } from "expo-font";
@@ -55,45 +37,10 @@ function RootNavigator() {
     Inter_500Medium,
     Inter_600SemiBold,
     Inter_700Bold,
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
   });
 
   useEffect(() => {
     if (error) throw error;
-<<<<<<< HEAD
-    if (fontsLoaded) SplashScreen.hideAsync();
-  }, [fontsLoaded, error]);
-
-  if (!fontsLoaded) {
-    return null;
-  }
-
-  console.log("Color Scheme:", colorScheme);
-
-  return (
-    <PaperProvider>
-      <SafeAreaProvider>
-        <ThemeProvider
-          value={colorScheme === "dark" ? DarkTheme : DefaultTheme}
-        >
-          <Stack>
-            <Stack.Screen name="index" options={{ headerShown: false }} />
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            <Stack.Screen name="Login" options={{ headerShown: false }} />
-            <Stack.Screen name="Signup" options={{ headerShown: false }} />
-            <Stack.Screen
-              name="LiveLocationShareScreen"
-              options={{ headerShown: false, presentation: "modal" }}
-            />
-            <Stack.Screen
-              name="SavedPlacesScreen"
-              options={{ title: "Saved Places" }}
-            />
-          </Stack>
-        </ThemeProvider>
-      </SafeAreaProvider>
-    </PaperProvider>
-=======
     if (fontsLoaded && authReady) SplashScreen.hideAsync();
   }, [fontsLoaded, authReady, error]);
 
@@ -219,6 +166,5 @@ export default function RootLayout() {
         </AlertsBadgeProvider>
       </AuthProvider>
     </AppearanceProvider>
->>>>>>> 5e3d2c8612989772d6fb21c83de6a6b0116ec9c3
   );
 }

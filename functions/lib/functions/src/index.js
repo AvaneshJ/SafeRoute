@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.expireStaleSafetySessions = exports.expireOldReports = exports.updateCrowdDensity = exports.markNotificationRead = exports.publishEmergencyEvent = exports.activateSOS = exports.safeWalkCheckin = exports.publishLiveShareEvent = exports.publishSafeWalkEvent = exports.onLiveRouteLocationUpdated = exports.publishSafetyEvent = exports.startLiveShare = exports.startSafeWalk = exports.revokeGuardian = exports.acceptGuardianInvite = exports.inviteGuardian = exports.createGuardianInvite = exports.onReportCreated = exports.verifyReport = exports.generateRoutes = exports.calculateSafetyScore = void 0;
+exports.expireStaleSafetySessions = exports.expireOldReports = exports.updateCrowdDensity = exports.markNotificationRead = exports.publishEmergencyEvent = exports.activateSOS = exports.safeWalkCheckin = exports.publishLiveShareEvent = exports.publishSafeWalkEvent = exports.onLiveRouteLocationUpdated = exports.publishSafetyEvent = exports.startLiveShare = exports.startSafeWalk = exports.revokeGuardian = exports.acceptGuardianInvite = exports.inviteGuardian = exports.createGuardianInvite = exports.moderateReport = exports.onReportCreated = exports.verifyReport = exports.generateRoutes = exports.calculateSafetyScore = void 0;
 exports.sendGuardianNotification = sendGuardianNotification;
 const https_1 = require("firebase-functions/v2/https");
 const scheduler_1 = require("firebase-functions/v2/scheduler");
@@ -187,6 +187,42 @@ exports.verifyReport = (0, https_1.onCall)(async (request) => {
     });
     return { reportId: ref.id, accepted: true, reason: null };
 });
+/**
+ * Phase 5 — roll a report into safety_scores/{geohash7}.
+ * Pending reports still contribute (lower weight); verified get a 1.5× boost.
+ */
+async function aggregateCommunityCell(report) {
+    const geohash = String(report.geohash || "");
+    if (!geohash)
+        return;
+    const severity = Number(report.severity) || 3;
+    const status = String(report.status || "pending");
+    if (status === "rejected" || status === "expired")
+        return;
+    const verified = status === "verified";
+    const weight = verified ? 1.5 : 1.0;
+    const rating = Math.min(5, Math.max(1, 6 - severity)); // stars
+    const ref = db.collection("safety_scores").doc(geohash);
+    await db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        const prev = snap.data() || {};
+        const prevWeight = Number(prev.communityWeight || 0);
+        const prevRating = Number(prev.communityRating || 0);
+        const nextWeight = prevWeight + weight;
+        const nextRating = nextWeight > 0
+            ? (prevRating * prevWeight + rating * weight) / nextWeight
+            : rating;
+        const incidents = Number(prev.verifiedIncidents30d || 0) + (severity >= 4 ? weight : 0);
+        tx.set(ref, {
+            communityRating: Math.round(nextRating * 100) / 100,
+            communityWeight: nextWeight,
+            verifiedIncidents30d: Math.round(incidents * 100) / 100,
+            historicalReports: Number(prev.historicalReports || 0) + 1,
+            updatedAt: firestore_2.FieldValue.serverTimestamp(),
+            source: "community_intelligence",
+        }, { merge: true });
+    });
+}
 exports.onReportCreated = (0, firestore_1.onDocumentCreated)("reports/{reportId}", async (event) => {
     const report = event.data?.data();
     const userId = report?.authorIdPrivate;
@@ -206,6 +242,41 @@ exports.onReportCreated = (0, firestore_1.onDocumentCreated)("reports/{reportId}
             geohash: String(report.geohash ?? ""),
         },
     });
+    // Soft-learn immediately so heat / scores react before manual verify
+    try {
+        await aggregateCommunityCell(report);
+    }
+    catch (err) {
+        console.error("aggregateCommunityCell failed", err);
+    }
+});
+/** Phase 5 — mark a report verified/rejected (Admin SDK; call from trusted moderation). */
+exports.moderateReport = (0, https_1.onCall)(async (request) => {
+    requireAuth(request.auth?.uid);
+    const { reportId, status } = request.data;
+    if (!reportId || (status !== "verified" && status !== "rejected")) {
+        throw new https_1.HttpsError("invalid-argument", "reportId and status required.");
+    }
+    const ref = db.collection("reports").doc(reportId);
+    const snap = await ref.get();
+    if (!snap.exists)
+        throw new https_1.HttpsError("not-found", "Report not found.");
+    const prev = snap.data() || {};
+    await ref.update({
+        status,
+        moderatedAt: firestore_2.FieldValue.serverTimestamp(),
+        moderatedBy: request.auth.uid,
+    });
+    if (status === "verified") {
+        await aggregateCommunityCell({ ...prev, status: "verified" });
+        await db.collection("trust_logs").add({
+            userId: prev.authorIdPrivate,
+            delta: 8,
+            reason: "accurate_report",
+            createdAt: firestore_2.FieldValue.serverTimestamp(),
+        });
+    }
+    return { reportId, status };
 });
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const EVENT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
