@@ -303,7 +303,7 @@ export default function SafeWalkScreen() {
               </Text>
             </View>
             <Image
-              source={require("../../assets/images/onboarding-guardian.png")}
+              source={require("../../assets/images/onboarding-guardian.jpg")}
               style={styles.heroImage}
               contentFit="contain"
             />
@@ -451,7 +451,7 @@ export default function SafeWalkScreen() {
           ) : (
             <View style={styles.emptyBlock}>
               <Image
-                source={require("../../assets/images/guardians-empty.png")}
+                source={require("../../assets/images/guardians-empty.jpg")}
                 style={[styles.emptyImage, { backgroundColor: c.heroWash }]}
                 contentFit="contain"
               />

@@ -372,7 +372,7 @@ export default function GuardiansScreen() {
         {empty ? (
           <View style={styles.empty} accessibilityLabel="No guardians yet">
             <Image
-              source={require("../../assets/images/guardians-empty.png")}
+              source={require("../../assets/images/guardians-empty.jpg")}
               style={styles.emptyArt}
               contentFit="contain"
             />

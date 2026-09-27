@@ -82,7 +82,7 @@ export default ({ config }) => ({
     googlePlacesApiKey: process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY,
     routingApiUrl: process.env.EXPO_PUBLIC_ROUTING_API_URL,
     eas: {
-      projectId: process.env.EXPO_PUBLIC_EAS_PROJECT_ID,
+      projectId: "b63c7a11-1b06-4531-a840-da530bac811e",
     },
   },
 });

@@ -49,7 +49,7 @@ const SLIDES: OnboardingSlide[] = [
     title: "A safer way home",
     body: "Routes chosen for how they feel, not only how fast they are.",
     benefits: ["Well-lit streets", "Busier sidewalks", "Reports from nearby"],
-    image: require("../assets/images/onboarding-safe-routes.png"),
+    image: require("../assets/images/onboarding-safe-routes.jpg"),
     imageLabel:
       "Live city map with a glowing indigo safe route weaving through illuminated streets",
   },
@@ -62,7 +62,7 @@ const SLIDES: OnboardingSlide[] = [
       "An ETA they can trust",
       "Alerted if you need help",
     ],
-    image: require("../assets/images/onboarding-guardian.png"),
+    image: require("../assets/images/onboarding-guardian.jpg"),
     imageLabel:
       "Traveler and guardian connected by live location sharing with ETA and status updates",
   },
@@ -71,7 +71,7 @@ const SLIDES: OnboardingSlide[] = [
     title: "Help, even offline",
     body: "If the signal drops, your people still hear from you.",
     benefits: ["Hold to confirm", "Text with your location", "Dial 112 or 122"],
-    image: require("../assets/images/onboarding-sos-offline.png"),
+    image: require("../assets/images/onboarding-sos-offline.jpg"),
     imageLabel:
       "SOS countdown ring with SMS fallback, location pin, and emergency numbers 112 and 122",
   },

@@ -133,7 +133,7 @@ export default function SafeWalkGuardianScreen() {
         {guardians.length === 0 ? (
           <View style={styles.empty}>
             <Image
-              source={require("../assets/images/guardians-empty.png")}
+              source={require("../assets/images/guardians-empty.jpg")}
               style={[styles.emptyImage, { backgroundColor: c.heroWash }]}
               contentFit="contain"
             />
