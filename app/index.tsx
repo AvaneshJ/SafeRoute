@@ -95,7 +95,7 @@ export default function WelcomeScreen() {
             ]}
           >
             <Image
-              source={require("../assets/images/welcome-hero.png")}
+              source={require("../assets/images/welcome-hero.jpg")}
               style={styles.heroImage}
               contentFit="cover"
               transition={300}

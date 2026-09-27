@@ -112,7 +112,7 @@ export function HeatMapPreview({ onPress, style }: HeatMapPreviewProps) {
 
       <View style={[styles.mapFrame, { backgroundColor: c.heroWash }]}>
         <Image
-          source={require("../../assets/images/heatmap-preview.png")}
+          source={require("../../assets/images/heatmap-preview.jpg")}
 
           style={styles.mapImage}
 
