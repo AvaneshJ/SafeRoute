@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>SafeRoute guardian invite</title>
+    <meta property="og:title" content="You've been invited as a SafeRoute guardian" />
+    <meta
+      property="og:description"
+      content="Accept to get Safe Walk alerts, live location, and SOS notifications from someone who trusts you."
+    />
+    <style>
+      :root {
+        --primary: #4f46e5;
+        --primary-pressed: #4338ca;
+        --text: #0f172a;
+        --muted: #64748b;
+        --surface: #ffffff;
+        --bg: #eef2ff;
+        --border: #e2e8f0;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        color: var(--text);
+        background: radial-gradient(circle at top, var(--bg), #fafbfd 60%);
+      }
+      .card {
+        width: 100%;
+        max-width: 420px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 24px;
+        padding: 32px 24px;
+        box-shadow: 0 20px 50px rgba(79, 70, 229, 0.12);
+        text-align: center;
+      }
+      .shield {
+        width: 64px;
+        height: 64px;
+        margin: 0 auto 16px;
+        border-radius: 20px;
+        display: grid;
+        place-items: center;
+        background: var(--bg);
+        color: var(--primary);
+        font-size: 32px;
+      }
+      h1 { font-size: 22px; margin: 0 0 8px; }
+      p { color: var(--muted); line-height: 1.5; margin: 0 0 20px; }
+      .btn {
+        display: block;
+        width: 100%;
+        padding: 14px 16px;
+        border-radius: 14px;
+        font-weight: 700;
+        font-size: 16px;
+        text-decoration: none;
+        border: 0;
+        cursor: pointer;
+      }
+      .primary { background: var(--primary); color: #fff; }
+      .primary:active { background: var(--primary-pressed); }
+      .secondary {
+        margin-top: 12px;
+        background: transparent;
+        color: var(--primary);
+        border: 1px solid var(--border);
+      }
+      ul { text-align: left; color: var(--muted); padding-left: 20px; margin: 0 0 24px; line-height: 1.7; }
+      .note { font-size: 13px; margin-top: 20px; margin-bottom: 0; }
+      .hidden { display: none; }
+      .error { color: #dc2626; }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <div class="shield" aria-hidden="true">&#128737;</div>
+      <div id="valid">
+        <h1>You've been invited as a guardian</h1>
+        <p>Someone who trusts you added you as a Trusted Guardian on SafeRoute.</p>
+        <ul>
+          <li>Get a notification when they start a Safe Walk or trip</li>
+          <li>Watch their live location and route</li>
+          <li>Get alerted instantly if they trigger SOS</li>
+        </ul>
+        <a id="open" class="btn primary" href="#">Open in SafeRoute</a>
+        <a id="download" class="btn secondary hidden" href="#">Get SafeRoute</a>
+        <p id="noapp" class="note hidden">
+          Don't have SafeRoute yet? Install it, then tap this invite link again.
+        </p>
+        <p class="note">This invite is single-use and expires in a few days.</p>
+      </div>
+      <div id="invalid" class="hidden">
+        <h1>Invite link incomplete</h1>
+        <p class="error">
+          This link is missing its invite code. Ask the sender to resend the invite from SafeRoute.
+        </p>
+      </div>
+    </main>
+    <script>
+      (function () {
+        // Set this to a Play Store / APK download URL once the app is distributed.
+        var DOWNLOAD_URL = "";
+        var PACKAGE = "com.saferoute.app";
+
+        var params = new URLSearchParams(window.location.search);
+        var inviteId = params.get("inviteId");
+        var token = params.get("token");
+        if (!inviteId || !token) {
+          document.getElementById("valid").classList.add("hidden");
+          document.getElementById("invalid").classList.remove("hidden");
+          return;
+        }
+
+        var query =
+          "inviteId=" + encodeURIComponent(inviteId) + "&token=" + encodeURIComponent(token);
+        var isAndroid = /android/i.test(navigator.userAgent);
+        var fallback = window.location.origin + window.location.pathname + "?" + query + "#noapp";
+        var appUrl = isAndroid
+          ? "intent://GuardianInvite?" + query +
+            "#Intent;scheme=saferoute;package=" + PACKAGE +
+            ";S.browser_fallback_url=" + encodeURIComponent(fallback) + ";end"
+          : "saferoute://GuardianInvite?" + query;
+
+        document.getElementById("open").setAttribute("href", appUrl);
+
+        if (DOWNLOAD_URL) {
+          var download = document.getElementById("download");
+          download.setAttribute("href", DOWNLOAD_URL);
+          download.classList.remove("hidden");
+        }
+        if (window.location.hash === "#noapp") {
+          document.getElementById("noapp").classList.remove("hidden");
+        }
+      })();
+    </script>
+  </body>
+</html>

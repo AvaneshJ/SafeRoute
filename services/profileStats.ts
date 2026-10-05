@@ -188,8 +188,8 @@ async function loadReportActivity(uid: string): Promise<{
     const reportsSnap = await withTimeout(
       getDocs(
         query(
-          collection(db, "reports"),
-          where("authorIdPrivate", "==", uid),
+          collection(db, "report_authors"),
+          where("authorId", "==", uid),
           orderBy("createdAt", "desc"),
           limit(200),
         ),
@@ -245,51 +245,26 @@ async function loadReportActivity(uid: string): Promise<{
 
 async function countCompletedSafeTrips(uid: string): Promise<number> {
   try {
+    // Owner-scoped: rules hide other people's closed sessions, so a participantIds query would be denied.
     const snap = await withTimeout(
       getDocs(
         query(
           collection(db, "routes"),
-          where("participantIds", "array-contains", uid),
-          orderBy("updatedAt", "desc"),
+          where("userId", "==", uid),
+          where("state", "==", "completed"),
           limit(100),
         ),
       ),
       QUERY_TIMEOUT_MS,
       "profileRoutes",
     );
-    let count = 0;
-    for (const row of snap.docs) {
-      const owner = String(row.get("ownerId") ?? row.get("userId") ?? "");
-      const state = String(row.get("state") ?? "");
+    return snap.docs.filter((row) => {
       const kind = String(row.get("kind") ?? "safe_walk");
-      if (
-        owner === uid &&
-        state === "completed" &&
-        (kind === "safe_walk" || kind === "live_share")
-      ) {
-        count += 1;
-      }
-    }
-    return count;
-  } catch {
-    try {
-      const snap = await withTimeout(
-        getDocs(
-          query(
-            collection(db, "routes"),
-            where("userId", "==", uid),
-            where("state", "==", "completed"),
-            limit(100),
-          ),
-        ),
-        QUERY_TIMEOUT_MS,
-        "profileRoutesFallback",
-      );
-      return snap.size;
-    } catch (error) {
-      console.warn("Profile safe trips unavailable:", error);
-      return 0;
-    }
+      return kind === "safe_walk" || kind === "live_share";
+    }).length;
+  } catch (error) {
+    console.warn("Profile safe trips unavailable:", error);
+    return 0;
   }
 }
 

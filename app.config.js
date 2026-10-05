@@ -21,6 +21,18 @@ export default ({ config }) => ({
   android: {
     package: "com.saferoute.app",
     googleServicesFile: "./google-services.json",
+    // Guardian invite links. Verification requires the signing cert in hosting/.well-known/assetlinks.json.
+    intentFilters: [
+      {
+        action: "VIEW",
+        autoVerify: true,
+        data: [
+          { scheme: "https", host: "saferoute-8bc4f.web.app", pathPrefix: "/invite" },
+          { scheme: "https", host: "saferoute-8bc4f.firebaseapp.com", pathPrefix: "/invite" },
+        ],
+        category: ["BROWSABLE", "DEFAULT"],
+      },
+    ],
     adaptiveIcon: {
       foregroundImage: "./assets/images/adaptive-icon.png",
       backgroundColor: "#E8F6F3",

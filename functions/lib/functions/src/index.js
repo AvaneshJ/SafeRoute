@@ -14,6 +14,9 @@ const trust_1 = require("../../core/trust");
 const routeOptimization_1 = require("../../core/routeOptimization");
 (0, app_1.initializeApp)();
 const db = (0, firestore_2.getFirestore)();
+db.settings({ ignoreUndefinedProperties: true });
+// Must match the Firestore database location; triggers can't run elsewhere.
+const FIRESTORE_REGION = "asia-south1";
 function requireAuth(uid) {
     if (!uid)
         throw new https_1.HttpsError("unauthenticated", "Sign in is required.");
@@ -130,6 +133,13 @@ exports.generateRoutes = (0, https_1.onCall)(async (request) => {
     });
     return { routes: cards, segmentCount: edges.length, departAtMs };
 });
+/** Private report → author mapping. Readable by the author only. */
+const REPORT_AUTHORS = "report_authors";
+async function reportAuthorId(reportId) {
+    const snap = await db.collection(REPORT_AUTHORS).doc(reportId).get();
+    const id = snap.get("authorId");
+    return typeof id === "string" && id ? id : null;
+}
 /** POST /report — writes the report, then verifyReport adjusts trust. */
 exports.verifyReport = (0, https_1.onCall)(async (request) => {
     const uid = requireAuth(request.auth?.uid);
@@ -148,8 +158,8 @@ exports.verifyReport = (0, https_1.onCall)(async (request) => {
         throw new https_1.HttpsError("failed-precondition", "Report location does not match the device.");
     }
     const recent = await db
-        .collection("reports")
-        .where("authorIdPrivate", "==", uid)
+        .collection(REPORT_AUTHORS)
+        .where("authorId", "==", uid)
         .orderBy("createdAt", "desc")
         .limit(5)
         .get();
@@ -172,9 +182,18 @@ exports.verifyReport = (0, https_1.onCall)(async (request) => {
         })) {
         throw new https_1.HttpsError("already-exists", "A matching report was filed in the last hour.");
     }
-    const ref = await db.collection("reports").add({
+    // The author id never goes on the public report doc; it lives in a private mirror.
+    const ref = db.collection("reports").doc();
+    const batch = db.batch();
+    batch.set(db.collection(REPORT_AUTHORS).doc(ref.id), {
+        authorId: uid,
+        geohash,
+        category: data.category,
+        status: "pending",
+        createdAt: firestore_2.FieldValue.serverTimestamp(),
+    });
+    batch.set(ref, {
         authorId: data.anonymous ? null : uid,
-        authorIdPrivate: uid,
         anonymous: data.anonymous,
         latitude: data.latitude,
         longitude: data.longitude,
@@ -185,6 +204,7 @@ exports.verifyReport = (0, https_1.onCall)(async (request) => {
         status: "pending",
         createdAt: firestore_2.FieldValue.serverTimestamp(),
     });
+    await batch.commit();
     return { reportId: ref.id, accepted: true, reason: null };
 });
 /**
@@ -223,10 +243,12 @@ async function aggregateCommunityCell(report) {
         }, { merge: true });
     });
 }
-exports.onReportCreated = (0, firestore_1.onDocumentCreated)("reports/{reportId}", async (event) => {
+exports.onReportCreated = (0, firestore_1.onDocumentCreated)({ document: "reports/{reportId}", region: FIRESTORE_REGION }, async (event) => {
     const report = event.data?.data();
-    const userId = report?.authorIdPrivate;
-    if (!report || typeof userId !== "string")
+    if (!report)
+        return;
+    const userId = await reportAuthorId(event.params.reportId);
+    if (!userId)
         return;
     await createAndDispatchNotification({
         userId,
@@ -267,10 +289,15 @@ exports.moderateReport = (0, https_1.onCall)(async (request) => {
         moderatedAt: firestore_2.FieldValue.serverTimestamp(),
         moderatedBy: request.auth.uid,
     });
-    if (status === "verified") {
+    await db
+        .collection(REPORT_AUTHORS)
+        .doc(reportId)
+        .set({ status }, { merge: true });
+    const authorId = await reportAuthorId(reportId);
+    if (status === "verified" && authorId) {
         await aggregateCommunityCell({ ...prev, status: "verified" });
         await db.collection("trust_logs").add({
-            userId: prev.authorIdPrivate,
+            userId: authorId,
             delta: 8,
             reason: "accurate_report",
             createdAt: firestore_2.FieldValue.serverTimestamp(),
@@ -329,6 +356,73 @@ function validLocation(value) {
             : Date.now(),
     };
 }
+const MAX_ROUTE_POINTS = 400;
+function validPath(value) {
+    if (!Array.isArray(value) || value.length < 2)
+        return null;
+    const points = value
+        .map((point) => validLocation(point))
+        .filter((point) => point !== null)
+        .map(({ latitude, longitude }) => ({
+        latitude: Math.round(latitude * 1e6) / 1e6,
+        longitude: Math.round(longitude * 1e6) / 1e6,
+    }));
+    if (points.length < 2)
+        return null;
+    if (points.length <= MAX_ROUTE_POINTS)
+        return points;
+    const step = (points.length - 1) / (MAX_ROUTE_POINTS - 1);
+    return Array.from({ length: MAX_ROUTE_POINTS }, (_, i) => points[Math.round(i * step)]);
+}
+function sessionCopy(kind, type, walkerName, destinationLabel) {
+    const to = destinationLabel ? ` to ${destinationLabel}` : "";
+    const at = destinationLabel ? ` at ${destinationLabel}` : "";
+    const walk = kind === "safe_walk";
+    switch (type) {
+        case "started":
+            return walk
+                ? {
+                    title: "Safe Walk started",
+                    body: `${walkerName} started a Safe Walk${to}. Tap to follow their live location.`,
+                }
+                : {
+                    title: `${walkerName} started a trip`,
+                    body: `Follow their live route${to} in SafeRoute.`,
+                };
+        case "arrived":
+            return {
+                title: `${walkerName} arrived safely`,
+                body: walk
+                    ? `${walkerName} completed their Safe Walk${at}.`
+                    : `${walkerName} reached their destination${at ? at : ""}.`,
+            };
+        case "checkin_failed":
+            return {
+                title: "Safety check-in missed",
+                body: `${walkerName} didn't respond to a safety check-in. Open to see their last location.`,
+            };
+        case "ended":
+            return {
+                title: walk ? `${walkerName} ended their Safe Walk` : `${walkerName} ended their trip`,
+                body: "They stopped sharing their live location. Check in with them if you're unsure.",
+            };
+        case "cancelled":
+            return {
+                title: walk ? "Safe Walk cancelled" : "Trip cancelled",
+                body: `${walkerName} ended the session before arriving.`,
+            };
+        case "guardian_acknowledged":
+            return {
+                title: "Your guardian is watching",
+                body: "A guardian opened your live location.",
+            };
+        default:
+            return {
+                title: walk ? "Safe Walk update" : "Trip update",
+                body: "Open SafeRoute for the latest safety update.",
+            };
+    }
+}
 function hash(value) {
     return (0, node_crypto_1.createHash)("sha256").update(value).digest("hex");
 }
@@ -351,11 +445,35 @@ async function acceptedGuardianIds(ownerId, requestedIds) {
         .filter((id) => typeof id === "string" && id.length > 0));
     if (!requestedIds || requestedIds.length === 0)
         return [...accepted];
-    const requested = [...new Set(requestedIds)];
-    if (requested.some((id) => !accepted.has(id))) {
-        throw new https_1.HttpsError("failed-precondition", "Every participant must be an accepted guardian.");
+    // Clients cache guardian ids locally; drop revoked/unknown ones instead of
+    // failing the whole session, and fall back to everyone still accepted.
+    const requested = [...new Set(requestedIds)].filter((id) => accepted.has(id));
+    return requested.length > 0 ? requested : [...accepted];
+}
+/** Indian mobile numbers are stored as +91XXXXXXXXXX on users.phone. */
+function phoneVariants(raw) {
+    const digits = raw.replace(/\D/g, "");
+    const national = digits.length > 10 ? digits.slice(-10) : digits;
+    const variants = new Set([raw]);
+    if (national.length === 10) {
+        variants.add(`+91${national}`);
+        variants.add(national);
+        variants.add(`91${national}`);
     }
-    return requested;
+    return [...variants].slice(0, 10);
+}
+async function findUserIdByPhone(phone) {
+    const variants = phoneVariants(phone);
+    for (const field of ["phone", "phoneNumber"]) {
+        const match = await db
+            .collection("users")
+            .where(field, "in", variants)
+            .limit(1)
+            .get();
+        if (!match.empty)
+            return match.docs[0].id;
+    }
+    return null;
 }
 function isExpoToken(token) {
     return (typeof token === "string" &&
@@ -393,13 +511,18 @@ async function sendExpo(tokens, title, body, data) {
         const ticketIds = tickets
             .map((ticket) => ticket.id)
             .filter((id) => typeof id === "string");
+        // Tickets come back in request order.
+        const deadTokens = tickets
+            .map((ticket, i) => ticket.details?.error === "DeviceNotRegistered" ? tokens[i] : null)
+            .filter((token) => typeof token === "string");
         if (tickets.some((ticket) => ticket.status === "ok")) {
-            return { status: "sent", ticketIds };
+            return { status: "sent", ticketIds, deadTokens };
         }
-        const invalid = tickets.length > 0 && tickets.every((ticket) => ticket.details?.error === "DeviceNotRegistered");
+        const invalid = tickets.length > 0 && deadTokens.length === tickets.length;
         return {
             status: invalid ? "invalid_push_token" : "failed",
             ticketIds,
+            deadTokens,
             error: tickets.map((ticket) => ticket.message).filter(Boolean).join("; ") ||
                 "Expo Push Service did not accept the notification.",
         };
@@ -444,6 +567,13 @@ async function createAndDispatchNotification(input) {
         route: input.route,
         notificationId: id,
     });
+    if (result.deadTokens && result.deadTokens.length > 0) {
+        await user.ref
+            .update({
+            expoPushTokens: firestore_2.FieldValue.arrayRemove(...result.deadTokens),
+        })
+            .catch((error) => console.warn("Could not prune push tokens", error));
+    }
     const delivery = {
         userId: input.userId,
         notificationId: id,
@@ -469,6 +599,24 @@ async function notifyParticipants(input) {
         data: { subjectId: input.subjectId, type: input.type, ...(input.data ?? {}) },
     })));
 }
+const INVITE_BASE_URL = process.env.INVITE_BASE_URL ?? "https://saferoute-8bc4f.web.app/invite";
+function inviteLinks(inviteId, token) {
+    const query = `inviteId=${encodeURIComponent(inviteId)}&token=${encodeURIComponent(token)}`;
+    return { inviteUrl: `${INVITE_BASE_URL}?${query}`, appRoute: `/GuardianInvite?${query}` };
+}
+function sendInvitePush(input) {
+    return createAndDispatchNotification({
+        userId: input.guardianUserId,
+        fromUserId: input.ownerId,
+        subjectId: input.inviteId,
+        eventId: `${input.inviteId}-${hash(input.token).slice(0, 12)}`,
+        type: "guardian_invite",
+        title: "Guardian invitation",
+        body: `${input.ownerName || "Someone"} wants you as their SafeRoute guardian. Tap to accept.`,
+        route: inviteLinks(input.inviteId, input.token).appRoute,
+        data: { inviteId: input.inviteId },
+    });
+}
 /** Creates a token-bound guardian invitation. Guardian writes are callable-only. */
 exports.createGuardianInvite = (0, https_1.onCall)(async (request) => {
     const uid = requireAuth(request.auth?.uid);
@@ -491,13 +639,24 @@ exports.createGuardianInvite = (0, https_1.onCall)(async (request) => {
             expiresAt: firestore_2.Timestamp.fromMillis(expiresAtMs),
             updatedAt: firestore_2.FieldValue.serverTimestamp(),
         });
+        const knownGuardian = optionalString(snap.get("guardianUserId"), 128);
+        const delivery = knownGuardian
+            ? await sendInvitePush({
+                guardianUserId: knownGuardian,
+                ownerId: uid,
+                ownerName: optionalString(snap.get("ownerName"), 100),
+                inviteId: ref.id,
+                token: inviteToken,
+            })
+            : null;
         return {
             inviteId: ref.id,
             inviteToken,
+            inviteUrl: inviteLinks(ref.id, inviteToken).inviteUrl,
             status: "pending",
             expiresAtMs,
-            delivery: null,
-            sms_required: true,
+            delivery,
+            sms_required: !delivery || delivery.sms_required,
         };
     }
     let guardianUserId = optionalString(data.guardianUserId, 128);
@@ -509,12 +668,15 @@ exports.createGuardianInvite = (0, https_1.onCall)(async (request) => {
     if (!guardianUserId && !email && !phone) {
         throw new https_1.HttpsError("invalid-argument", "guardianUserId, email, or phone is required.");
     }
-    if (!guardianUserId) {
-        const field = email ? "email" : "phoneNumber";
-        const value = email ?? phone;
-        const match = await db.collection("users").where(field, "==", value).limit(1).get();
+    if (!guardianUserId && email) {
+        const match = await db.collection("users").where("email", "==", email).limit(1).get();
         guardianUserId = match.empty ? null : match.docs[0].id;
     }
+    if (!guardianUserId && phone) {
+        guardianUserId = await findUserIdByPhone(phone);
+    }
+    if (guardianUserId === uid)
+        guardianUserId = null;
     const existing = await db
         .collection("guardians")
         .where("userId", "==", uid)
@@ -530,9 +692,11 @@ exports.createGuardianInvite = (0, https_1.onCall)(async (request) => {
     const inviteToken = (0, node_crypto_1.randomBytes)(32).toString("base64url");
     const ref = db.collection("guardians").doc();
     const expiresAtMs = Date.now() + INVITE_TTL_MS;
+    const ownerName = optionalString((await db.collection("users").doc(uid).get()).get("displayName"), 100);
     await ref.set({
         userId: uid,
         ownerId: uid,
+        ownerName,
         guardianUserId,
         inviteeEmail: email,
         inviteePhone: phone,
@@ -545,21 +709,18 @@ exports.createGuardianInvite = (0, https_1.onCall)(async (request) => {
         expiresAt: firestore_2.Timestamp.fromMillis(expiresAtMs),
     });
     const delivery = guardianUserId
-        ? await createAndDispatchNotification({
-            userId: guardianUserId,
-            fromUserId: uid,
-            subjectId: ref.id,
-            eventId: ref.id,
-            type: "guardian_invite",
-            title: "Guardian invitation",
-            body: "Someone invited you to be their SafeRoute guardian.",
-            route: "/(tabs)/contacts",
-            data: { inviteId: ref.id },
+        ? await sendInvitePush({
+            guardianUserId,
+            ownerId: uid,
+            ownerName,
+            inviteId: ref.id,
+            token: inviteToken,
         })
         : null;
     return {
         inviteId: ref.id,
         inviteToken,
+        inviteUrl: inviteLinks(ref.id, inviteToken).inviteUrl,
         status: "pending",
         expiresAtMs,
         delivery,
@@ -574,6 +735,7 @@ exports.acceptGuardianInvite = (0, https_1.onCall)(async (request) => {
     const token = requiredString(data.inviteToken, "inviteToken", 256);
     const ref = db.collection("guardians").doc(inviteId);
     const now = firestore_2.Timestamp.now();
+    const guardianName = optionalString((await db.collection("users").doc(uid).get()).get("displayName"), 100);
     const ownerId = await db.runTransaction(async (transaction) => {
         const snap = await transaction.get(ref);
         if (!snap.exists)
@@ -600,6 +762,7 @@ exports.acceptGuardianInvite = (0, https_1.onCall)(async (request) => {
         }
         transaction.update(ref, {
             guardianUserId: uid,
+            guardianName,
             status: "accepted",
             acceptedAt: now,
             updatedAt: now,
@@ -614,7 +777,7 @@ exports.acceptGuardianInvite = (0, https_1.onCall)(async (request) => {
         eventId: `accepted-${inviteId}`,
         type: "guardian_accepted",
         title: "Guardian connected",
-        body: "Your guardian accepted the SafeRoute invitation.",
+        body: `${guardianName || "Your guardian"} accepted your SafeRoute invitation.`,
         route: "/(tabs)/contacts",
         data: { inviteId },
     });
@@ -646,38 +809,44 @@ exports.revokeGuardian = (0, https_1.onCall)(async (request) => {
             db.collection("routes").where("userId", "==", uid).limit(200).get(),
             db.collection("emergencies").where("userId", "==", uid).limit(200).get(),
         ]);
-        const active = [...routes.docs, ...emergencies.docs].filter((doc) => !["completed", "cancelled", "resolved"].includes(String(doc.get("state"))));
-        const batch = db.batch();
-        active.forEach((doc) => {
-            batch.update(doc.ref, {
-                participantIds: firestore_2.FieldValue.arrayRemove(revokedUserId),
-                guardianUserIds: firestore_2.FieldValue.arrayRemove(revokedUserId),
-                updatedAt: firestore_2.FieldValue.serverTimestamp(),
-            });
-            batch.set(doc.ref.collection("live").doc("current"), {
-                participantIds: firestore_2.FieldValue.arrayRemove(revokedUserId),
-                updatedAt: firestore_2.FieldValue.serverTimestamp(),
-            }, { merge: true });
+        // Closed sessions too: a revoked guardian must not keep reading past trips.
+        const shared = [...routes.docs, ...emergencies.docs].filter((doc) => {
+            const ids = doc.get("participantIds");
+            return Array.isArray(ids) && ids.includes(revokedUserId);
         });
-        if (active.length > 0)
+        for (let start = 0; start < shared.length; start += 200) {
+            const batch = db.batch();
+            shared.slice(start, start + 200).forEach((doc) => {
+                batch.update(doc.ref, {
+                    participantIds: firestore_2.FieldValue.arrayRemove(revokedUserId),
+                    guardianUserIds: firestore_2.FieldValue.arrayRemove(revokedUserId),
+                    updatedAt: firestore_2.FieldValue.serverTimestamp(),
+                });
+                batch.set(doc.ref.collection("live").doc("current"), {
+                    participantIds: firestore_2.FieldValue.arrayRemove(revokedUserId),
+                    updatedAt: firestore_2.FieldValue.serverTimestamp(),
+                }, { merge: true });
+            });
             await batch.commit();
+        }
     }
     return { guardianId, status: "revoked" };
 });
 async function createSafetySession(ownerId, kind, data) {
     const requested = uniqueStrings(data.guardianUserIds ?? (data.guardianUserId ? [data.guardianUserId] : []));
-    const hasExplicitGuardians = Array.isArray(data.guardianUserIds) || data.guardianUserId != null;
-    const guardianIds = hasExplicitGuardians && requested.length === 0
-        ? []
-        : await acceptedGuardianIds(ownerId, requested);
+    const guardianIds = await acceptedGuardianIds(ownerId, requested);
     const idempotencyKey = data.eventId == null ? (0, node_crypto_1.randomUUID)() : eventId(data.eventId);
     const sessionId = documentId(kind, ownerId, idempotencyKey);
     const ref = db.collection("routes").doc(sessionId);
-    const location = kind === "live_share" ? validLocation(data.location) : null;
-    const destination = kind === "safe_walk" ? validLocation(data.destination) : null;
+    const location = validLocation(data.location);
+    const destination = validLocation(data.destination);
     if (kind === "safe_walk" && !destination) {
         throw new https_1.HttpsError("invalid-argument", "destination is required.");
     }
+    const destinationLabel = optionalString(data.destinationLabel, 200) ??
+        optionalString(data.destinationName, 200);
+    const routePath = validPath(data.routePath);
+    const travelMode = optionalString(data.travelMode, 20);
     const participantIds = [ownerId, ...guardianIds];
     const ownerProfile = await db.collection("users").doc(ownerId).get();
     const walkerName = optionalString(data.walkerName, 100) ||
@@ -696,12 +865,15 @@ async function createSafetySession(ownerId, kind, data) {
             kind,
             userId: ownerId,
             ownerId,
-            guardianUserId: guardianIds[0],
+            guardianUserId: guardianIds[0] ?? null,
             guardianUserIds: guardianIds,
             participantIds,
             walkerName,
             destination,
-            destinationLabel: optionalString(data.destinationLabel, 200),
+            destinationLabel,
+            routePath,
+            travelMode,
+            startLocation: location,
             etaMinutes: typeof data.etaMinutes === "number" && Number.isFinite(data.etaMinutes)
                 ? Math.max(0, data.etaMinutes)
                 : null,
@@ -730,6 +902,7 @@ async function createSafetySession(ownerId, kind, data) {
         });
         return true;
     });
+    const copy = sessionCopy(kind, "started", walkerName, destinationLabel);
     const deliveries = created
         ? await notifyParticipants({
             ownerId,
@@ -737,10 +910,8 @@ async function createSafetySession(ownerId, kind, data) {
             subjectId: sessionId,
             eventId: idempotencyKey,
             type: `${kind}_started`,
-            title: kind === "safe_walk" ? "Safe Walk started" : "Live location shared",
-            body: kind === "safe_walk"
-                ? `${walkerName} started a Safe Walk. Tap to follow their live location.`
-                : `${walkerName} shared a live location with you.`,
+            title: copy.title,
+            body: copy.body,
             route: `/LiveWalkViewer?sessionId=${sessionId}&collection=routes`,
             data: { sessionId, kind },
         })
@@ -774,6 +945,20 @@ const SAFETY_EVENTS = new Set([
     "ended",
     "cancelled",
 ]);
+/** After a session closes, participants keep read access this long (rules check readableUntil). */
+const CLOSED_READ_GRACE_MS = 15 * 60_000;
+const ROUTE_MAX_DURATION_MS = 8 * 60 * 60_000;
+const SOS_MAX_DURATION_MS = 4 * 60 * 60_000;
+const RESPONDER_ACCESS_MS = 60 * 60_000;
+/** sos_responders/{emergencyId} = { userIds }. Server-only. */
+const SOS_RESPONDERS = "sos_responders";
+const OPEN_ROUTE_STATES = ["active", "check_in_pending", "sos"];
+function closeFields() {
+    return {
+        closedAt: firestore_2.FieldValue.serverTimestamp(),
+        readableUntil: firestore_2.Timestamp.fromMillis(Date.now() + CLOSED_READ_GRACE_MS),
+    };
+}
 function stateForSafetyEvent(type, current) {
     if (type === "checkin_requested")
         return "check_in_pending";
@@ -798,6 +983,9 @@ async function publishSafetyEventInternal(uid, data) {
     const ref = db.collection("routes").doc(sessionId);
     let participantIds = [];
     let ownerId = "";
+    let kind = "safe_walk";
+    let walkerName = "Someone you trust";
+    let destinationLabel = null;
     let state = "active";
     const duplicate = await db.runTransaction(async (transaction) => {
         const snap = await transaction.get(ref);
@@ -805,6 +993,10 @@ async function publishSafetyEventInternal(uid, data) {
             throw new https_1.HttpsError("not-found", "Safety session not found.");
         participantIds = uniqueStrings(snap.get("participantIds"));
         ownerId = String(snap.get("ownerId") ?? snap.get("userId") ?? "");
+        kind = String(snap.get("kind") ?? "safe_walk");
+        walkerName = String(snap.get("walkerName") || walkerName);
+        destinationLabel =
+            typeof snap.get("destinationLabel") === "string" ? snap.get("destinationLabel") : null;
         if (!participantIds.includes(uid)) {
             throw new https_1.HttpsError("permission-denied", "You are not a session participant.");
         }
@@ -831,7 +1023,16 @@ async function publishSafetyEventInternal(uid, data) {
             data: data.data && typeof data.data === "object" ? data.data : {},
             createdAt: now,
         });
-        transaction.update(ref, { state, lastEventId: id, updatedAt: now });
+        const etaMinutes = typeof data.etaMinutes === "number" && Number.isFinite(data.etaMinutes)
+            ? Math.max(0, data.etaMinutes)
+            : undefined;
+        transaction.update(ref, {
+            state,
+            lastEventId: id,
+            updatedAt: now,
+            ...(etaMinutes !== undefined ? { etaMinutes } : {}),
+            ...(OPEN_ROUTE_STATES.includes(state) ? {} : closeFields()),
+        });
         transaction.set(ref.collection("live").doc("current"), {
             ownerId,
             participantIds,
@@ -842,24 +1043,26 @@ async function publishSafetyEventInternal(uid, data) {
         }, { merge: true });
         return false;
     });
-    const shouldNotify = !duplicate && !["location", "checkin_ok"].includes(type);
-    const ownerProfile = await db.collection("users").doc(ownerId).get();
-    const walkerName = optionalString(ownerProfile.get("displayName"), 100) ||
-        "Someone you trust";
+    const shouldNotify = !duplicate && !["location", "checkin_ok", "checkin_requested"].includes(type);
+    let recipients = participantIds.filter((id) => id !== uid);
+    if (type === "guardian_acknowledged") {
+        recipients = recipients.filter((id) => id === ownerId);
+    }
+    const copy = sessionCopy(kind, type, walkerName, destinationLabel);
     const deliveries = shouldNotify
         ? await notifyParticipants({
             ownerId,
-            participantIds,
+            participantIds: recipients,
             subjectId: sessionId,
             eventId: id,
             type: `safety_${type}`,
-            title: type === "checkin_failed" ? "Safety check-in missed" : "Safe Walk update",
-            body: type === "arrived"
-                ? `${walkerName} arrived safely.`
-                : "Open SafeRoute for the latest safety update.",
-            route: `/LiveWalkViewer?sessionId=${sessionId}&collection=routes`,
-            data: { sessionId, eventType: type },
-            includeOwner: uid !== ownerId,
+            title: copy.title,
+            body: copy.body,
+            route: type === "guardian_acknowledged"
+                ? "/(tabs)/alerts"
+                : `/LiveWalkViewer?sessionId=${sessionId}&collection=routes`,
+            data: { sessionId, eventType: type, kind },
+            includeOwner: true,
         })
         : [];
     return {
@@ -875,32 +1078,42 @@ exports.publishSafetyEvent = (0, https_1.onCall)(async (request) => {
     const uid = requireAuth(request.auth?.uid);
     return publishSafetyEventInternal(uid, request.data ?? {});
 });
-exports.onLiveRouteLocationUpdated = (0, firestore_1.onDocumentWritten)("routes/{routeId}/live/current", async (event) => {
+/**
+ * Server-side arrival so guardians hear "arrived safely" even when the walker's
+ * app is backgrounded. Foreground clients publish their own arrival event.
+ */
+exports.onLiveRouteLocationUpdated = (0, firestore_1.onDocumentWritten)({ document: "routes/{routeId}/live/current", region: FIRESTORE_REGION }, async (event) => {
     const live = event.data?.after.data();
     const location = live?.location;
     if (typeof location?.latitude !== "number" ||
         typeof location?.longitude !== "number" ||
-        live?.source !== "background") {
+        live?.source !== "background" ||
+        !["active", "check_in_pending"].includes(String(live?.state ?? "active"))) {
         return;
     }
     const route = await db.collection("routes").doc(event.params.routeId).get();
-    if (!route.exists ||
-        route.get("kind") !== "safe_walk" ||
-        route.get("state") !== "active") {
+    if (!route.exists || route.get("state") !== "active")
         return;
-    }
     const destination = route.get("destination");
     if (typeof destination?.latitude !== "number" ||
-        typeof destination?.longitude !== "number" ||
-        (0, routeOptimization_1.haversineM)(location, destination) > 50) {
+        typeof destination?.longitude !== "number") {
         return;
     }
-    await publishSafetyEventInternal(String(route.get("ownerId")), {
-        sessionId: event.params.routeId,
-        eventId: `arrival-${event.params.routeId}`,
-        type: "arrived",
-        location,
-    });
+    const walking = route.get("kind") === "safe_walk" || route.get("travelMode") === "walking";
+    if ((0, routeOptimization_1.haversineM)(location, destination) > (walking ? 50 : 80))
+        return;
+    try {
+        await publishSafetyEventInternal(String(route.get("ownerId")), {
+            sessionId: event.params.routeId,
+            eventId: `arrival-${event.params.routeId}`,
+            type: "arrived",
+            location,
+        });
+    }
+    catch (error) {
+        if (!(error instanceof https_1.HttpsError && error.code === "failed-precondition"))
+            throw error;
+    }
 });
 exports.publishSafeWalkEvent = exports.publishSafetyEvent;
 exports.publishLiveShareEvent = exports.publishSafetyEvent;
@@ -917,6 +1130,89 @@ exports.safeWalkCheckin = (0, https_1.onCall)(async (request) => {
     });
     return { ...result, state: ok ? "active" : "sos" };
 });
+const NEARBY_RADIUS_M = 300;
+const NEARBY_FRESH_MS = 30 * 60_000;
+const NEARBY_MAX_HELPERS = 15;
+const NEARBY_BROADCASTS_PER_HOUR = 3;
+function distanceM(a, b) {
+    const rad = Math.PI / 180;
+    const dLat = (b.latitude - a.latitude) * rad;
+    const dLng = (b.longitude - a.longitude) * rad;
+    const h = Math.sin(dLat / 2) ** 2 +
+        Math.cos(a.latitude * rad) * Math.cos(b.latitude * rad) * Math.sin(dLng / 2) ** 2;
+    return 2 * 6_371_000 * Math.asin(Math.sqrt(h));
+}
+/** Opted-in users whose app reported a location within NEARBY_RADIUS_M recently. */
+async function findNearbyHelpers(center, exclude) {
+    // geohash6 cells are ~1.2 km × 0.6 km, so a 3×3 sample at the radius covers the circle.
+    const dLat = NEARBY_RADIUS_M / 111_320;
+    const dLng = NEARBY_RADIUS_M / (111_320 * Math.cos((center.latitude * Math.PI) / 180));
+    const cells = new Set();
+    for (const i of [-1, 0, 1]) {
+        for (const j of [-1, 0, 1]) {
+            cells.add((0, geohash_1.encodeGeohash)(center.latitude + i * dLat, center.longitude + j * dLng, 6));
+        }
+    }
+    const snap = await db.collection("presence").where("geohash6", "in", [...cells]).get();
+    const cutoff = Date.now() - NEARBY_FRESH_MS;
+    const excluded = new Set(exclude);
+    return snap.docs
+        .map((doc) => ({
+        userId: String(doc.get("userId") ?? doc.id),
+        latitude: Number(doc.get("latitude")),
+        longitude: Number(doc.get("longitude")),
+        updatedAtMs: Number(doc.get("updatedAtMs") ?? 0),
+    }))
+        .filter((p) => !excluded.has(p.userId) &&
+        p.updatedAtMs >= cutoff &&
+        Number.isFinite(p.latitude) &&
+        Number.isFinite(p.longitude))
+        .map((p) => ({ userId: p.userId, distanceM: distanceM(center, p) }))
+        .filter((p) => p.distanceM <= NEARBY_RADIUS_M)
+        .sort((a, b) => a.distanceM - b.distanceM)
+        .slice(0, NEARBY_MAX_HELPERS);
+}
+/** Caps how often one account can broadcast an SOS to strangers. */
+async function claimNearbyBroadcast(uid) {
+    // sos_limits has no client rules, so only the server can read or reset it.
+    const ref = db.collection("sos_limits").doc(uid);
+    return db.runTransaction(async (transaction) => {
+        const snap = await transaction.get(ref);
+        const hourAgo = Date.now() - 60 * 60_000;
+        const recent = (Array.isArray(snap.get("nearbySosAtMs")) ? snap.get("nearbySosAtMs") : [])
+            .filter((t) => typeof t === "number" && t > hourAgo);
+        if (recent.length >= NEARBY_BROADCASTS_PER_HOUR)
+            return false;
+        transaction.set(ref, { nearbySosAtMs: [...recent, Date.now()] }, { merge: true });
+        return true;
+    });
+}
+async function alertNearbyHelpers(input) {
+    const helpers = await findNearbyHelpers(input.location, input.exclude);
+    if (helpers.length === 0 || !(await claimNearbyBroadcast(input.ownerId)))
+        return 0;
+    const ref = db.collection("emergencies").doc(input.emergencyId);
+    // Kept off the emergency doc so the SOS owner can't learn who was nearby.
+    await db.collection(SOS_RESPONDERS).doc(input.emergencyId).set({
+        userIds: helpers.map((h) => h.userId),
+        createdAt: firestore_2.FieldValue.serverTimestamp(),
+    });
+    await ref.update({
+        responderAccessUntil: firestore_2.Timestamp.fromMillis(Date.now() + RESPONDER_ACCESS_MS),
+    });
+    await Promise.all(helpers.map((helper) => createAndDispatchNotification({
+        userId: helper.userId,
+        fromUserId: input.ownerId,
+        subjectId: input.emergencyId,
+        eventId: `${input.eventId}-nearby`,
+        type: "sos_nearby",
+        title: "Someone nearby needs help",
+        body: `A SafeRoute user about ${Math.max(10, Math.round(helper.distanceM / 10) * 10)} m from you triggered SOS. Tap to see where they are.`,
+        route: `/LiveWalkViewer?sessionId=${input.emergencyId}&collection=emergencies&role=responder`,
+        data: { emergencyId: input.emergencyId, eventType: "nearby" },
+    })));
+    return helpers.length;
+}
 /** POST /sos */
 exports.activateSOS = (0, https_1.onCall)(async (request) => {
     const uid = requireAuth(request.auth?.uid);
@@ -933,6 +1229,8 @@ exports.activateSOS = (0, https_1.onCall)(async (request) => {
     const requested = uniqueStrings(data.guardianUserIds);
     const guardianIds = await acceptedGuardianIds(uid, requested);
     const participantIds = [uid, ...guardianIds];
+    const walkerName = optionalString(data.walkerName, 100) ||
+        optionalString((await db.collection("users").doc(uid).get()).get("displayName"), 100);
     const emergencyId = documentId("sos", uid, id);
     const ref = db.collection("emergencies").doc(emergencyId);
     const duplicate = await db.runTransaction(async (transaction) => {
@@ -945,6 +1243,7 @@ exports.activateSOS = (0, https_1.onCall)(async (request) => {
             ownerId: uid,
             guardianUserIds: guardianIds,
             participantIds,
+            walkerName,
             latitude: location.latitude,
             longitude: location.longitude,
             location,
@@ -979,19 +1278,31 @@ exports.activateSOS = (0, https_1.onCall)(async (request) => {
         });
         return false;
     });
-    const deliveries = duplicate
-        ? []
-        : await notifyParticipants({
-            ownerId: uid,
-            participantIds,
-            subjectId: emergencyId,
-            eventId: id,
-            type: "sos_activated",
-            title: "SOS alert",
-            body: "A person who trusts you needs help. Open SafeRoute now.",
-            route: `/LiveWalkViewer?sessionId=${emergencyId}&collection=emergencies`,
-            data: { emergencyId, eventType: "activated" },
-        });
+    const [deliveries] = duplicate
+        ? [[]]
+        : await Promise.all([
+            notifyParticipants({
+                ownerId: uid,
+                participantIds,
+                subjectId: emergencyId,
+                eventId: id,
+                type: "sos_activated",
+                title: walkerName ? `SOS from ${walkerName}` : "SOS alert",
+                body: `${walkerName || "Someone who trusts you"} needs help. Tap to see their live location.`,
+                route: `/LiveWalkViewer?sessionId=${emergencyId}&collection=emergencies`,
+                data: { emergencyId, eventType: "activated" },
+            }),
+            alertNearbyHelpers({
+                ownerId: uid,
+                emergencyId,
+                eventId: id,
+                location,
+                exclude: participantIds,
+            }).catch((error) => {
+                console.warn("Nearby helper alert failed", error);
+                return 0;
+            }),
+        ]);
     const smsRequired = data.networkType === "none" ||
         guardianIds.length === 0 ||
         deliveries.some((item) => item.sms_required);
@@ -999,6 +1310,8 @@ exports.activateSOS = (0, https_1.onCall)(async (request) => {
         emergencyId,
         eventId: id,
         duplicate,
+        // Nearby results stay server-side: even a yes/no would let a caller probe
+        // whether anyone is around a point.
         deliveries,
         sms_required: smsRequired,
         smsFallback: smsRequired,
@@ -1023,6 +1336,7 @@ exports.publishEmergencyEvent = (0, https_1.onCall)(async (request) => {
     const location = validLocation(data.location);
     const ref = db.collection("emergencies").doc(emergencyId);
     let participantIds = [];
+    const responderIds = uniqueStrings((await db.collection(SOS_RESPONDERS).doc(emergencyId).get()).get("userIds"));
     let ownerId = "";
     let state = "active";
     const duplicate = await db.runTransaction(async (transaction) => {
@@ -1031,7 +1345,12 @@ exports.publishEmergencyEvent = (0, https_1.onCall)(async (request) => {
             throw new https_1.HttpsError("not-found", "Emergency not found.");
         participantIds = uniqueStrings(snap.get("participantIds"));
         ownerId = String(snap.get("ownerId") ?? snap.get("userId") ?? "");
-        if (!participantIds.includes(uid)) {
+        const accessUntil = snap.get("responderAccessUntil");
+        const isResponder = responderIds.includes(uid) &&
+            type === "guardian_acknowledged" &&
+            accessUntil instanceof firestore_2.Timestamp &&
+            accessUntil.toMillis() > Date.now();
+        if (!participantIds.includes(uid) && !isResponder) {
             throw new https_1.HttpsError("permission-denied", "You are not an emergency participant.");
         }
         if (uid !== ownerId && type !== "guardian_acknowledged") {
@@ -1055,7 +1374,12 @@ exports.publishEmergencyEvent = (0, https_1.onCall)(async (request) => {
             data: data.data && typeof data.data === "object" ? data.data : {},
             createdAt: now,
         });
-        transaction.update(ref, { state, lastEventId: id, updatedAt: now });
+        transaction.update(ref, {
+            state,
+            lastEventId: id,
+            updatedAt: now,
+            ...(state === "active" ? {} : closeFields()),
+        });
         transaction.set(ref.collection("live").doc("current"), {
             ownerId,
             participantIds,
@@ -1067,18 +1391,55 @@ exports.publishEmergencyEvent = (0, https_1.onCall)(async (request) => {
         return false;
     });
     const shouldNotify = !duplicate && type !== "location";
+    const sosCopy = {
+        resolved: { title: "SOS resolved", body: "The emergency has been marked resolved. They are safe." },
+        cancelled: { title: "SOS cancelled", body: "The SOS was cancelled by the sender." },
+        guardian_acknowledged: {
+            title: "A guardian is responding",
+            body: "One of your guardians has seen your SOS and is watching your live location.",
+        },
+    };
+    const actorIsResponder = !participantIds.includes(uid) && responderIds.includes(uid);
+    const copy = type === "guardian_acknowledged" && actorIsResponder
+        ? {
+            title: "Someone nearby is coming",
+            body: "A SafeRoute user near you saw your SOS and is on their way to help.",
+        }
+        : sosCopy[type] ?? {
+            title: "SOS update",
+            body: "Open SafeRoute for the latest emergency update.",
+        };
+    if (shouldNotify && (type === "resolved" || type === "cancelled") && responderIds.length) {
+        await Promise.all(responderIds
+            .filter((responder) => responder !== uid)
+            .map((responder) => createAndDispatchNotification({
+            userId: responder,
+            fromUserId: ownerId,
+            subjectId: emergencyId,
+            eventId: id,
+            type: `sos_nearby_${type}`,
+            title: type === "resolved" ? "Nearby SOS resolved" : "Nearby SOS cancelled",
+            body: type === "resolved"
+                ? "The person is safe now. Thank you for being ready to help."
+                : "The SOS was cancelled. No need to go.",
+            route: "/(tabs)/alerts",
+            data: { emergencyId, eventType: type },
+        }))).catch((error) => console.warn("Responder close-out push failed", error));
+    }
     const deliveries = shouldNotify
         ? await notifyParticipants({
             ownerId,
-            participantIds,
+            participantIds: type === "guardian_acknowledged"
+                ? [ownerId]
+                : participantIds.filter((participant) => participant !== uid),
             subjectId: emergencyId,
             eventId: id,
             type: `sos_${type}`,
-            title: type === "resolved" ? "SOS resolved" : "SOS update",
-            body: type === "resolved"
-                ? "The emergency has been marked resolved."
-                : "Open SafeRoute for the latest emergency update.",
-            route: `/LiveWalkViewer?sessionId=${emergencyId}&collection=emergencies`,
+            title: copy.title,
+            body: copy.body,
+            route: type === "guardian_acknowledged"
+                ? "/(tabs)/alerts"
+                : `/LiveWalkViewer?sessionId=${emergencyId}&collection=emergencies`,
             data: { emergencyId, eventType: type },
             includeOwner: uid !== ownerId,
         })
@@ -1154,33 +1515,51 @@ exports.expireOldReports = (0, scheduler_1.onSchedule)("every 60 minutes", async
         .limit(200)
         .get();
     const batch = db.batch();
-    stale.docs.forEach((doc) => batch.update(doc.ref, { status: "expired" }));
+    stale.docs.forEach((doc) => {
+        batch.update(doc.ref, { status: "expired" });
+        batch.set(db.collection(REPORT_AUTHORS).doc(doc.id), { status: "expired" }, { merge: true });
+    });
     await batch.commit();
 });
 exports.expireStaleSafetySessions = (0, scheduler_1.onSchedule)("every 60 minutes", async () => {
-    const cutoff = firestore_2.Timestamp.fromMillis(Date.now() - 24 * 60 * 60 * 1000);
-    const [routes, emergencies] = await Promise.all([
-        db
-            .collection("routes")
-            .where("state", "==", "active")
-            .where("updatedAt", "<", cutoff)
-            .limit(200)
-            .get(),
-        db
-            .collection("emergencies")
-            .where("state", "==", "active")
-            .where("updatedAt", "<", cutoff)
-            .limit(200)
-            .get(),
+    // Location fixes only touch live/current, so a session is stale when both
+    // the parent doc and its latest fix are older than the idle window.
+    const idleMs = 2 * 60 * 60 * 1000;
+    const nowMs = Date.now();
+    const cutoff = firestore_2.Timestamp.fromMillis(nowMs - idleMs);
+    const [idleRoutes, idleEmergencies, oldRoutes, oldEmergencies] = await Promise.all([
+        db.collection("routes").where("state", "in", OPEN_ROUTE_STATES)
+            .where("updatedAt", "<", cutoff).limit(200).get(),
+        db.collection("emergencies").where("state", "==", "active")
+            .where("updatedAt", "<", cutoff).limit(200).get(),
+        // Hard caps: sharing ends even if the phone keeps sending fixes.
+        db.collection("routes").where("state", "in", OPEN_ROUTE_STATES)
+            .where("createdAt", "<", firestore_2.Timestamp.fromMillis(nowMs - ROUTE_MAX_DURATION_MS))
+            .limit(200).get(),
+        db.collection("emergencies").where("state", "==", "active")
+            .where("createdAt", "<", firestore_2.Timestamp.fromMillis(nowMs - SOS_MAX_DURATION_MS))
+            .limit(200).get(),
     ]);
-    const batch = db.batch();
-    routes.docs.forEach((item) => batch.update(item.ref, {
-        state: "expired",
-        updatedAt: firestore_2.FieldValue.serverTimestamp(),
-    }));
-    emergencies.docs.forEach((item) => batch.update(item.ref, {
-        state: "expired",
-        updatedAt: firestore_2.FieldValue.serverTimestamp(),
-    }));
-    await batch.commit();
+    const forced = new Set([...oldRoutes.docs, ...oldEmergencies.docs].map((d) => d.ref.path));
+    const byPath = new Map();
+    [...idleRoutes.docs, ...idleEmergencies.docs, ...oldRoutes.docs, ...oldEmergencies.docs]
+        .forEach((d) => byPath.set(d.ref.path, d));
+    const candidates = [...byPath.values()];
+    const lives = await Promise.all(candidates.map((item) => item.ref.collection("live").doc("current").get()));
+    const toExpire = candidates.filter((item, i) => {
+        if (forced.has(item.ref.path))
+            return true;
+        const liveUpdated = lives[i].get("updatedAt");
+        return !(liveUpdated instanceof firestore_2.Timestamp && liveUpdated.toMillis() > cutoff.toMillis());
+    });
+    for (let start = 0; start < toExpire.length; start += 200) {
+        const batch = db.batch();
+        toExpire.slice(start, start + 200).forEach((item) => {
+            const now = firestore_2.FieldValue.serverTimestamp();
+            batch.update(item.ref, { state: "expired", updatedAt: now, ...closeFields() });
+            // set+merge so a missing live doc doesn't fail the batch.
+            batch.set(item.ref.collection("live").doc("current"), { state: "expired", updatedAt: now }, { merge: true });
+        });
+        await batch.commit();
+    }
 });

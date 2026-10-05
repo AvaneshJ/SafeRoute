@@ -39,11 +39,17 @@ import {
   notifyGuardianSms,
   sosMessage,
 } from "@/services/guardianAlerts";
-import { startSafetyTracking } from "@/services/safetyTracking";
+import {
+  publishSafetyLocation,
+  startSafetyTracking,
+  stopSafetyTracking,
+} from "@/services/safetyTracking";
+import { connectedGuardianIds, readGuardians } from "@/services/guardianSync";
+import type { TrackingPayload } from "@/tasks/locationTracking";
 import { httpsCallable } from "firebase/functions";
 
 const EMERGENCY_CALL = "122";
-const CONTACTS_STORAGE_KEY = "@SafeRoute:contacts";
+const WALKER_NAME_KEY = "@SafeRoute:displayName";
 
 type StatusRow = {
   id: string;
@@ -75,6 +81,8 @@ export default function SosScreen() {
     })();
   }, []);
   const watchRef = useRef<Location.LocationSubscription | null>(null);
+  const trackingRef = useRef<TrackingPayload | null>(null);
+  const [resolving, setResolving] = useState(false);
 
   useEffect(() => {
     return () => {
@@ -108,6 +116,12 @@ export default function SosScreen() {
         id: "guardian",
         label: "Guardian notified",
         detail: "Push / in-app alert",
+        on: false,
+      },
+      {
+        id: "nearby",
+        label: "Nearby helpers alerted",
+        detail: "SafeRoute users within 300 m, if any",
         on: false,
       },
       {
@@ -147,7 +161,10 @@ export default function SosScreen() {
             timeInterval: SOS_GPS_INTERVAL_MS,
             distanceInterval: 0,
           },
-          () => undefined,
+          (location) => {
+            const payload = trackingRef.current;
+            if (payload) void publishSafetyLocation(payload, location).catch(console.warn);
+          },
         );
       }
 
@@ -161,10 +178,9 @@ export default function SosScreen() {
         online = false;
       }
 
-      const contactsRaw = await AsyncStorage.getItem(CONTACTS_STORAGE_KEY);
-      const contacts: { name: string; phone: string }[] = contactsRaw
-        ? JSON.parse(contactsRaw)
-        : [];
+      const contacts = await readGuardians();
+      const guardianUserIds = connectedGuardianIds(contacts);
+      const walkerName = (await AsyncStorage.getItem(WALKER_NAME_KEY)) || undefined;
       const position =
         permission.status === "granted"
           ? await Location.getCurrentPositionAsync({})
@@ -196,35 +212,27 @@ export default function SosScreen() {
             snapshotPath: null,
             safeWalkId: null,
             eventId: `sos-${Date.now()}`,
-            guardianUserIds: contacts
-              .map(
-                (contact) =>
-                  (contact as { guardianUserId?: string }).guardianUserId,
-              )
-              .filter((value): value is string => Boolean(value)),
+            walkerName,
+            ...(guardianUserIds.length ? { guardianUserIds } : {}),
           });
           emergencyId = response.data.emergencyId;
           smsGuardianUserIds = (response.data.deliveries ?? [])
             .filter((delivery) => delivery.sms_required)
             .map((delivery) => delivery.userId);
-          await startSafetyTracking("emergencies", emergencyId);
+          const tracking = await startSafetyTracking("emergencies", emergencyId);
+          trackingRef.current = tracking.payload;
         } catch (error) {
           console.warn("Online SOS dispatch failed; using SMS fallback.", error);
         }
       }
 
-      const smsTargets = contacts.filter((contact) => {
-        const guardian = contact as {
-          verified?: boolean;
-          guardianUserId?: string;
-        };
-        return (
+      const smsTargets = contacts.filter(
+        (guardian) =>
           !emergencyId ||
           !guardian.verified ||
-          (guardian.guardianUserId &&
-            smsGuardianUserIds.includes(guardian.guardianUserId))
-        );
-      });
+          !guardian.guardianUserId ||
+          smsGuardianUserIds.includes(guardian.guardianUserId),
+      );
       for (const contact of smsTargets) {
         const result = await notifyGuardianSms(contact.phone, body);
         smsOk = result.opened || smsOk;
@@ -349,6 +357,43 @@ export default function SosScreen() {
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
   };
 
+  const finishSos = async () => {
+    const payload = trackingRef.current;
+    setResolving(true);
+    try {
+      if (payload) {
+        await httpsCallable(functions, "publishEmergencyEvent")({
+          emergencyId: payload.sessionId,
+          type: "resolved",
+          eventId: `${payload.sessionId}-resolved`,
+        });
+      }
+    } catch (error) {
+      console.warn("Could not mark SOS resolved", error);
+    } finally {
+      trackingRef.current = null;
+      watchRef.current?.remove();
+      watchRef.current = null;
+      Vibration.cancel();
+      await stopSafetyTracking().catch(console.warn);
+      setSession((current) => reduceSos(current, { type: "RESET" }));
+      setStatusRows([]);
+      setResolving(false);
+      announce("SOS ended. Your guardians have been told you are safe.");
+    }
+  };
+
+  const confirmSafe = () => {
+    Alert.alert(
+      "Are you safe now?",
+      "Your guardians will be notified that the emergency is over and live location sharing will stop.",
+      [
+        { text: "Keep SOS on", style: "cancel" },
+        { text: "I'm safe", onPress: () => void finishSos() },
+      ],
+    );
+  };
+
   const phase = session.phase;
   const bg =
     phase === "active"
@@ -462,6 +507,18 @@ export default function SosScreen() {
           accessibilityLabel="Cancel SOS"
         >
           <Text style={styles.cancelText}>Cancel</Text>
+        </Pressable>
+      ) : null}
+
+      {phase === "active" ? (
+        <Pressable
+          onPress={confirmSafe}
+          disabled={resolving}
+          style={[styles.cancel, resolving && { opacity: 0.6 }]}
+          accessibilityRole="button"
+          accessibilityLabel="I'm safe, end SOS"
+        >
+          <Text style={styles.cancelText}>{resolving ? "Ending…" : "I'm safe"}</Text>
         </Pressable>
       ) : null}
 

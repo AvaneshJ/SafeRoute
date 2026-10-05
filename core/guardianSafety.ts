@@ -90,13 +90,22 @@ export type SafeWalkStartRequest = {
   eventId?: string;
   etaMinutes?: number | null;
   destinationLabel?: string | null;
+  location?: SafetyLocation | null;
+  routePath?: Array<{ latitude: number; longitude: number }> | null;
 };
 
 export type LiveShareStartRequest = {
-  guardianUserIds: string[];
+  /** Omit or leave empty to share with every accepted guardian. */
+  guardianUserIds?: string[];
   eventId?: string;
   expiresAtMs?: number | null;
   location?: SafetyLocation | null;
+  destination?: SafetyLocation | null;
+  destinationLabel?: string | null;
+  etaMinutes?: number | null;
+  routePath?: Array<{ latitude: number; longitude: number }> | null;
+  travelMode?: string | null;
+  walkerName?: string | null;
 };
 
 export type SafetySessionStartResponse = {
@@ -163,6 +172,23 @@ export type MarkNotificationReadResponse = {
   notificationId: string;
   readAtMs: number;
 };
+
+export const GUARDIAN_INVITE_BASE_URL = "https://saferoute-8bc4f.web.app/invite";
+
+export function guardianInviteUrl(inviteId: string, token: string): string {
+  return `${GUARDIAN_INVITE_BASE_URL}?inviteId=${encodeURIComponent(inviteId)}&token=${encodeURIComponent(token)}`;
+}
+
+/** Evenly thins a polyline, always keeping both endpoints. */
+export function downsamplePath<T extends { latitude: number; longitude: number }>(
+  path: T[],
+  maxPoints: number,
+): Array<{ latitude: number; longitude: number }> {
+  const points = path.map(({ latitude, longitude }) => ({ latitude, longitude }));
+  if (points.length <= maxPoints || maxPoints < 2) return points;
+  const step = (points.length - 1) / (maxPoints - 1);
+  return Array.from({ length: maxPoints }, (_, i) => points[Math.round(i * step)]);
+}
 
 export function safetyMapsLink(latitude: number, longitude: number): string {
   return `https://maps.google.com/?q=${latitude},${longitude}`;

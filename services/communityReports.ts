@@ -74,7 +74,7 @@ export async function fetchNearbyCommunityReports(
         comment: String(d.note || ""),
         category: String(d.category || "other"),
         timestamp: created,
-        userId: String(d.authorId || d.authorIdPrivate || "community"),
+        userId: String(d.authorId || "community"),
         status,
       });
     }

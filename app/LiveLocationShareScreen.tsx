@@ -1,15 +1,11 @@
 import { PrimaryButton, SecondaryButton } from "@/components/design-system";
 import { functions } from "@/config/firebase";
 import { spacing, typography } from "@/constants/theme";
-import {
-  GUARDIANS_STORAGE_KEY,
-  normalizeGuardians,
-  type Guardian,
-} from "@/core/guardians";
+import { type Guardian } from "@/core/guardians";
 import { useAppTheme } from "@/hooks/useAppTheme";
 import { mapsLink, notifyGuardianSms } from "@/services/guardianAlerts";
+import { readGuardians, subscribeGuardians } from "@/services/guardianSync";
 import { startSafetyTracking, stopSafetyTracking } from "@/services/safetyTracking";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Location from "expo-location";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { httpsCallable } from "firebase/functions";
@@ -28,9 +24,8 @@ export default function LiveLocationShareScreen() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    void AsyncStorage.getItem(GUARDIANS_STORAGE_KEY).then((raw) => {
-      setGuardians(normalizeGuardians(raw ? JSON.parse(raw) : []));
-    });
+    void readGuardians().then(setGuardians);
+    return subscribeGuardians(setGuardians);
   }, []);
 
   const selected =
@@ -44,6 +39,7 @@ export default function LiveLocationShareScreen() {
       return;
     }
     setBusy(true);
+    const selectedConnected = Boolean(selected.verified && selected.guardianUserId);
     let position: Location.LocationObject | null = null;
     try {
       position = await Location.getCurrentPositionAsync({
@@ -58,8 +54,7 @@ export default function LiveLocationShareScreen() {
           delivery?: { smsRequired?: boolean };
         }
       >(functions, "startLiveShare")({
-        guardianUserId: selected.guardianUserId ?? null,
-        guardianUserIds: selected.guardianUserId ? [selected.guardianUserId] : [],
+        ...(selectedConnected ? { guardianUserIds: [selected.guardianUserId] } : {}),
         eventId: `share-${Date.now()}`,
         location: {
           latitude: position.coords.latitude,
@@ -70,10 +65,11 @@ export default function LiveLocationShareScreen() {
       setSessionId(result.data.sessionId);
       setSharing(true);
       const smsRequired =
-        result.data.delivery?.smsRequired ??
-        result.data.smsRequired ??
-        result.data.sms_required ??
-        false;
+        !selectedConnected ||
+        (result.data.delivery?.smsRequired ??
+          result.data.smsRequired ??
+          result.data.sms_required ??
+          false);
       if (smsRequired) {
         await notifyGuardianSms(
           selected.phone,

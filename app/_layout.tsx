@@ -31,7 +31,6 @@ SplashScreen.preventAutoHideAsync();
 function RootNavigator() {
   const { scheme } = useAppearance();
   const { ready: authReady } = useAuth();
-  useNotificationBootstrap();
   const [fontsLoaded, error] = useFonts({
     "Roboto-Mono": require("../assets/fonts/SpaceMono-Regular.ttf"),
     Inter_400Regular,
@@ -44,6 +43,7 @@ function RootNavigator() {
     if (error) throw error;
     if (fontsLoaded && authReady) SplashScreen.hideAsync();
   }, [fontsLoaded, authReady, error]);
+  useNotificationBootstrap(Boolean(fontsLoaded && authReady));
 
   if (!fontsLoaded || !authReady) {
     return null;

@@ -16,10 +16,46 @@ service cloud.firestore {
       allow write: if signedIn() && request.auth.uid == userId;
     }
 
+    // Live location sharing is scoped to the session's open lifetime. After close,
+    // participants keep the session doc + events (never live/current) until readableUntil.
+    function ownsSession(data) {
+      return signedIn()
+        && (data.ownerId == request.auth.uid || data.userId == request.auth.uid);
+    }
+
+    function inGrace(data) {
+      return data.readableUntil is timestamp && request.time < data.readableUntil;
+    }
+
+    function routeOpen(data) {
+      return data.state in ['active', 'check_in_pending', 'sos'];
+    }
+
+    function emergencyOpen(data) {
+      return data.state == 'active';
+    }
+
+    function routeDoc(id) {
+      return get(/databases/$(database)/documents/routes/$(id)).data;
+    }
+
+    function emergencyDoc(id) {
+      return get(/databases/$(database)/documents/emergencies/$(id)).data;
+    }
+
+    // Reports are created only by the verifyReport callable; the author id lives in report_authors.
     match /reports/{reportId} {
-      allow create: if signedIn();
       allow read: if signedIn();
-      allow update, delete: if false;
+      allow create, update, delete: if false;
+    }
+
+    match /report_authors/{reportId} {
+      allow read: if signedIn() && resource.data.authorId == request.auth.uid;
+      allow write: if false;
+    }
+
+    match /sos_limits/{userId} {
+      allow read, write: if false;
     }
 
     match /road_segments/{id} {
@@ -33,25 +69,30 @@ service cloud.firestore {
     }
 
     match /routes/{id} {
-      allow read: if isParticipant(resource.data);
+      allow read: if ownsSession(resource.data)
+        || (isParticipant(resource.data) && (routeOpen(resource.data) || inGrace(resource.data)));
       allow write: if false;
 
       match /live/current {
-        allow read: if isParticipant(resource.data);
+        allow read: if ownsSession(routeDoc(id))
+          || (isParticipant(routeDoc(id)) && routeOpen(routeDoc(id)));
         allow update: if signedIn()
-          && get(/databases/$(database)/documents/routes/$(id)).data.ownerId == request.auth.uid
+          && routeDoc(id).ownerId == request.auth.uid
+          && routeOpen(routeDoc(id))
           && request.resource.data.ownerId == request.auth.uid
           && request.resource.data.participantIds == resource.data.participantIds
           && request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(['location', 'recordedAtMs', 'source', 'updatedAt']);
+            .hasOnly(['location', 'recordedAtMs', 'source', 'updatedAt',
+                      'etaMinutes', 'remainingM', 'heading', 'speedMps', 'routePath'])
+          && (!('routePath' in request.resource.data)
+              || (request.resource.data.routePath is list
+                  && request.resource.data.routePath.size() <= 400));
         allow create, delete: if false;
       }
 
       match /events/{eventId} {
-        allow read: if signedIn()
-          && isParticipant(
-            get(/databases/$(database)/documents/routes/$(id)).data
-          );
+        allow read: if ownsSession(routeDoc(id))
+          || (isParticipant(routeDoc(id)) && (routeOpen(routeDoc(id)) || inGrace(routeDoc(id))));
         allow write: if false;
       }
 
@@ -60,14 +101,38 @@ service cloud.firestore {
       }
     }
 
+    // Nearby SafeRoute users alerted by an SOS can follow it only while it is active
+    // and within the server-set access window. The responder list is server-only.
+    function isActiveResponder(id, data) {
+      return signedIn()
+        && emergencyOpen(data)
+        && data.responderAccessUntil is timestamp
+        && request.time < data.responderAccessUntil
+        && request.auth.uid in
+             get(/databases/$(database)/documents/sos_responders/$(id)).data.userIds;
+    }
+
+    function canSeeEmergency(id, data) {
+      return ownsSession(data)
+        || (isParticipant(data) && (emergencyOpen(data) || inGrace(data)))
+        || isActiveResponder(id, data);
+    }
+
+    match /sos_responders/{id} {
+      allow read, write: if false;
+    }
+
     match /emergencies/{id} {
-      allow read: if isParticipant(resource.data);
+      allow read: if canSeeEmergency(id, resource.data);
       allow write: if false;
 
       match /live/current {
-        allow read: if isParticipant(resource.data);
+        allow read: if ownsSession(emergencyDoc(id))
+          || (isParticipant(emergencyDoc(id)) && emergencyOpen(emergencyDoc(id)))
+          || isActiveResponder(id, emergencyDoc(id));
         allow update: if signedIn()
-          && get(/databases/$(database)/documents/emergencies/$(id)).data.ownerId == request.auth.uid
+          && emergencyDoc(id).ownerId == request.auth.uid
+          && emergencyOpen(emergencyDoc(id))
           && request.resource.data.ownerId == request.auth.uid
           && request.resource.data.participantIds == resource.data.participantIds
           && request.resource.data.diff(resource.data).affectedKeys()
@@ -76,16 +141,28 @@ service cloud.firestore {
       }
 
       match /events/{eventId} {
-        allow read: if signedIn()
-          && isParticipant(
-            get(/databases/$(database)/documents/emergencies/$(id)).data
-          );
+        allow read: if canSeeEmergency(id, emergencyDoc(id));
         allow write: if false;
       }
 
       match /{document=**} {
         allow read, write: if false;
       }
+    }
+
+    // Approximate "last seen" location for nearby-SOS alerts. Server-read only.
+    match /presence/{userId} {
+      allow read: if false;
+      allow delete: if signedIn() && request.auth.uid == userId;
+      allow create, update: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.userId == userId
+        && request.resource.data.keys().hasOnly(
+             ['userId', 'latitude', 'longitude', 'geohash6', 'updatedAtMs', 'updatedAt'])
+        && request.resource.data.latitude is number
+        && request.resource.data.longitude is number
+        && request.resource.data.geohash6 is string
+        && request.resource.data.geohash6.size() == 6;
     }
 
     match /guardians/{id} {

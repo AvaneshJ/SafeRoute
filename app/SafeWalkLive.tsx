@@ -42,6 +42,7 @@ import { fetchWalkingRoute } from "@/services/walkingRoute";
 import { fetchLiveReroute } from "@/services/safeRouteApi";
 import {
   publishSafetyLocation,
+  publishSafetyRoute,
   stopSafetyTracking,
 } from "@/services/safetyTracking";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
@@ -327,6 +328,12 @@ export default function SafeWalkLiveScreen() {
       setRemainingPath(walking.coordinates);
       phaseRef.current = "active";
       setPhase("active");
+      if (sessionId && auth.currentUser) {
+        void publishSafetyRoute(
+          { collection: "routes", sessionId, userId: auth.currentUser.uid },
+          walking.coordinates,
+        ).catch(console.warn);
+      }
 
       // Mark session active (guardians already verified — skip invite wait)
       const armedAt = Date.now();
@@ -391,21 +398,6 @@ export default function SafeWalkLiveScreen() {
           };
           lastPosRef.current = position;
           setUserCoord(position);
-          if (
-            sessionId &&
-            auth.currentUser &&
-            Date.now() - lastUploadAtRef.current >= 5_000
-          ) {
-            lastUploadAtRef.current = Date.now();
-            void publishSafetyLocation(
-              {
-                collection: "routes",
-                sessionId,
-                userId: auth.currentUser.uid,
-              },
-              loc,
-            ).catch(console.warn);
-          }
 
           // Meaningful move vs anchor (ignore GPS jitter / tiny sim noise)
           const anchor = moveAnchorRef.current ?? position;
@@ -430,6 +422,26 @@ export default function SafeWalkLiveScreen() {
           });
           stepIndexRef.current = snapshot.stepIndex;
           applyNavSnapshot(snapshot, extendedRef.current);
+
+          if (
+            sessionId &&
+            auth.currentUser &&
+            Date.now() - lastUploadAtRef.current >= 5_000
+          ) {
+            lastUploadAtRef.current = Date.now();
+            void publishSafetyLocation(
+              {
+                collection: "routes",
+                sessionId,
+                userId: auth.currentUser.uid,
+              },
+              loc,
+              {
+                etaMinutes: snapshot.remainingMinutes,
+                remainingM: snapshot.remainingMeters,
+              },
+            ).catch(console.warn);
+          }
 
           // Keep session ETA fresh; stillness is handled by the wall-clock timer
           if (
@@ -667,8 +679,8 @@ export default function SafeWalkLiveScreen() {
     if (sessionId) {
       await httpsCallable(functions, "publishSafetyEvent")({
         sessionId,
-        type: "cancelled",
-        eventId: `${sessionId}-cancelled`,
+        type: "ended",
+        eventId: `${sessionId}-ended`,
       }).catch(console.warn);
     }
     await stopSafetyTracking();

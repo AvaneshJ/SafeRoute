@@ -1,8 +1,23 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.GUARDIAN_INVITE_BASE_URL = void 0;
+exports.guardianInviteUrl = guardianInviteUrl;
+exports.downsamplePath = downsamplePath;
 exports.safetyMapsLink = safetyMapsLink;
 exports.safeWalkStartSms = safeWalkStartSms;
 exports.safeWalkArrivalText = safeWalkArrivalText;
+exports.GUARDIAN_INVITE_BASE_URL = "https://saferoute-8bc4f.web.app/invite";
+function guardianInviteUrl(inviteId, token) {
+    return `${exports.GUARDIAN_INVITE_BASE_URL}?inviteId=${encodeURIComponent(inviteId)}&token=${encodeURIComponent(token)}`;
+}
+/** Evenly thins a polyline, always keeping both endpoints. */
+function downsamplePath(path, maxPoints) {
+    const points = path.map(({ latitude, longitude }) => ({ latitude, longitude }));
+    if (points.length <= maxPoints || maxPoints < 2)
+        return points;
+    const step = (points.length - 1) / (maxPoints - 1);
+    return Array.from({ length: maxPoints }, (_, i) => points[Math.round(i * step)]);
+}
 function safetyMapsLink(latitude, longitude) {
     return `https://maps.google.com/?q=${latitude},${longitude}`;
 }

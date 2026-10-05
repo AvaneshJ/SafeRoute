@@ -61,3 +61,6 @@ data/processed/**
 !data/processed/community_reports.csv
 !data/processed/road_safety_scores.csv
 !data/processed/lighting_meta.json
+
+# Firebase CLI cache
+.firebase/

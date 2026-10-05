@@ -46,12 +46,13 @@ import {
   LiveNavigationHUD,
   type LiveNavRouteAlert,
 } from "../../components/navigation/LiveNavigationHUD";
+import { createGuardianId, type Guardian } from "../../core/guardians";
 import {
-  GUARDIANS_STORAGE_KEY,
-  createGuardianId,
-  normalizeGuardians,
-  type Guardian,
-} from "../../core/guardians";
+  downsamplePath,
+  type LiveShareStartRequest,
+} from "../../core/guardianSafety";
+import { PRIVACY_SHARE_KEY } from "@/constants/preferences";
+import { connectedGuardianIds, readGuardians } from "@/services/guardianSync";
 import NearestPlaceConfirmationModal from "../../components/maps/NearestPlaceConfirmationModal";
 import SafetyReviewModal from "../../components/maps/SafetyReviewModal";
 import SearchBar from "../../components/maps/SearchBar";
@@ -159,6 +160,7 @@ const REROUTE_COOLDOWN_MS = 25_000;
 const UNKNOWN_STREET_SNAP_M = 80;
 /** Refetch community reports only after moving this far. */
 const SAFETY_DATA_RELOAD_M = 500;
+const WALKER_NAME_KEY = "@SafeRoute:displayName";
 
 const SafeMaps = () => {
   // --- Navigation Hooks ---
@@ -219,6 +221,7 @@ const SafeMaps = () => {
   const arrivedAlertedRef = useRef(false);
   const navShareSessionRef = useRef("");
   const navShareUploadAtRef = useRef(0);
+  const navShareArrivedRef = useRef(false);
   const navAlongRef = useRef<number | null>(null);
   const lastFixTimestampRef = useRef(0);
   const isNavigationModeRef = useRef(false);
@@ -1856,7 +1859,22 @@ const SafeMaps = () => {
           userId: auth.currentUser.uid,
         },
         newLocation,
+        {
+          etaMinutes: snapshot.remainingMinutes,
+          remainingM: snapshot.remainingMeters,
+        },
       ).catch(console.warn);
+    }
+
+    if (snapshot.arrived && navShareSessionRef.current && !navShareArrivedRef.current) {
+      navShareArrivedRef.current = true;
+      const sessionId = navShareSessionRef.current;
+      void httpsCallable(functions, "publishSafetyEvent")({
+        sessionId,
+        type: "arrived",
+        eventId: `${sessionId}-arrived`,
+        location: { latitude, longitude },
+      }).catch(console.warn);
     }
 
     const accurateFix = typeof accuracy !== "number" || accuracy <= 50;
@@ -2055,40 +2073,59 @@ const SafeMaps = () => {
     }
 
     try {
-      const raw = await AsyncStorage.getItem(GUARDIANS_STORAGE_KEY);
-      const list = normalizeGuardians(raw ? JSON.parse(raw) : []);
+      const list = await readGuardians();
       const primary = list.find((g) => g.isPrimary) ?? list[0] ?? null;
       setPrimaryGuardian(primary);
       setGuardianConnected(Boolean(primary?.verified));
-      if (primary) {
+      const sharingAllowed =
+        (await AsyncStorage.getItem(PRIVACY_SHARE_KEY)) !== "false";
+      navShareArrivedRef.current = false;
+      if (primary && sharingAllowed) {
+        const here = {
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude,
+        };
+        const destination = destinationRef.current;
         try {
           const response = await httpsCallable<
-            Record<string, unknown>,
+            LiveShareStartRequest,
             { sessionId: string; sms_required: boolean }
           >(functions, "startLiveShare")({
-            guardianUserIds: primary.guardianUserId
-              ? [primary.guardianUserId]
-              : [],
+            guardianUserIds: connectedGuardianIds(list),
             eventId: `navigation-${createGuardianId()}`,
-            location: {
-              latitude: location.coords.latitude,
-              longitude: location.coords.longitude,
-            },
+            location: here,
+            destination: destination
+              ? { latitude: destination.latitude, longitude: destination.longitude }
+              : null,
+            destinationLabel: selectedLocation?.title ?? null,
+            etaMinutes: Math.round(routeInfo.duration || 0),
+            routePath: downsamplePath(routeCoordinates, 300),
+            travelMode: "walking",
+            walkerName: (await AsyncStorage.getItem(WALKER_NAME_KEY)) || null,
           });
+          if (!isNavigationModeRef.current) {
+            void httpsCallable(functions, "publishSafetyEvent")({
+              sessionId: response.data.sessionId,
+              type: "cancelled",
+              eventId: `${response.data.sessionId}-cancelled`,
+            }).catch(console.warn);
+            return;
+          }
           navShareSessionRef.current = response.data.sessionId;
           await startSafetyTracking("routes", response.data.sessionId);
           setGuardianConnected(!response.data.sms_required);
-          if (response.data.sms_required) {
+          if (!primary.verified || response.data.sms_required) {
             await notifyGuardianSms(
               primary.phone,
-              `I'm sharing my navigation location from SafeRoute. Last known location: ${mapsLink(location.coords.latitude, location.coords.longitude)}.`,
+              `I'm sharing my navigation location from SafeRoute. Last known location: ${mapsLink(here.latitude, here.longitude)}.`,
             );
           }
-        } catch {
+        } catch (error) {
+          console.warn("Live trip sharing unavailable; using SMS fallback.", error);
           setGuardianConnected(false);
           await notifyGuardianSms(
             primary.phone,
-            `I'm starting navigation with SafeRoute. Last known location: ${mapsLink(location.coords.latitude, location.coords.longitude)}.`,
+            `I'm starting navigation with SafeRoute. Last known location: ${mapsLink(here.latitude, here.longitude)}.`,
           );
         }
       }
@@ -2116,13 +2153,16 @@ const SafeMaps = () => {
     const sharingSession = navShareSessionRef.current;
     navShareSessionRef.current = "";
     if (sharingSession) {
-      void httpsCallable(functions, "publishSafetyEvent")({
-        sessionId: sharingSession,
-        type: "ended",
-        eventId: `${sharingSession}-ended`,
-      }).catch(console.warn);
+      if (!navShareArrivedRef.current) {
+        void httpsCallable(functions, "publishSafetyEvent")({
+          sessionId: sharingSession,
+          type: "ended",
+          eventId: `${sharingSession}-ended`,
+        }).catch(console.warn);
+      }
       void stopSafetyTracking();
     }
+    navShareArrivedRef.current = false;
     setIsNavigationMode(false);
     setLiveNav(null);
     navStepIndexRef.current = 0;

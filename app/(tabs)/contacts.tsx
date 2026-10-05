@@ -13,14 +13,12 @@ import {
   typography,
 } from "@/constants/theme";
 import { useAppTheme } from "@/hooks/useAppTheme";
-import { auth, db, functions } from "@/config/firebase";
+import { functions } from "@/config/firebase";
 import {
-  GUARDIANS_STORAGE_KEY,
   MAX_GUARDIANS,
   RELATIONSHIP_OPTIONS,
   createGuardianId,
   ensurePrimary,
-  normalizeGuardians,
   setPrimaryGuardian,
   sortGuardians,
   type Guardian,
@@ -30,11 +28,14 @@ import {
   guardianInviteMessage,
   notifyGuardianSms,
 } from "@/services/guardianAlerts";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  readGuardians,
+  subscribeGuardians,
+  writeGuardians,
+} from "@/services/guardianSync";
+import { guardianInviteUrl } from "@/core/guardianSafety";
 import { Image } from "expo-image";
 import * as Linking from "expo-linking";
-import { onAuthStateChanged } from "firebase/auth";
-import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import React, { useCallback, useEffect, useState } from "react";
 import {
@@ -64,25 +65,17 @@ export default function GuardiansScreen() {
   const [phoneError, setPhoneError] = useState("");
 
   const load = useCallback(async () => {
-    try {
-      const raw = await AsyncStorage.getItem(GUARDIANS_STORAGE_KEY);
-      const list = ensurePrimary(
-        normalizeGuardians(raw ? JSON.parse(raw) : []),
-      );
-      setGuardians(sortGuardians(list));
-    } catch (error) {
-      console.error("Failed to load guardians", error);
-    }
+    setGuardians(await readGuardians());
   }, []);
 
   useEffect(() => {
     void load();
+    return subscribeGuardians(setGuardians);
   }, [load]);
 
   const persist = async (next: Guardian[]) => {
-    const sorted = sortGuardians(ensurePrimary(next));
-    setGuardians(sorted);
-    await AsyncStorage.setItem(GUARDIANS_STORAGE_KEY, JSON.stringify(sorted));
+    setGuardians(sortGuardians(ensurePrimary(next)));
+    await writeGuardians(next);
   };
 
   const resetForm = () => {
@@ -119,49 +112,6 @@ export default function GuardiansScreen() {
       // User dismissed share sheet
     }
   };
-
-  useEffect(() => {
-    let stopConnections: (() => void) | undefined;
-    const stopAuth = onAuthStateChanged(auth, (user) => {
-      stopConnections?.();
-      if (!user) return;
-      stopConnections = onSnapshot(
-        query(collection(db, "guardians"), where("userId", "==", user.uid)),
-        (snapshot) => {
-          const connections = new Map(
-            snapshot.docs.map((item) => [item.id, item.data()]),
-          );
-          setGuardians((current) => {
-            const next = current.map((guardian) => {
-              const connection = guardian.connectionId
-                ? connections.get(guardian.connectionId)
-                : undefined;
-              if (!connection) return guardian;
-              const status = connection.status as Guardian["connectionStatus"];
-              return {
-                ...guardian,
-                verified: status === "accepted",
-                connectionStatus: status,
-                guardianUserId:
-                  typeof connection.guardianUserId === "string"
-                    ? connection.guardianUserId
-                    : undefined,
-              };
-            });
-            void AsyncStorage.setItem(
-              GUARDIANS_STORAGE_KEY,
-              JSON.stringify(next),
-            );
-            return sortGuardians(next);
-          });
-        },
-      );
-    });
-    return () => {
-      stopAuth();
-      stopConnections?.();
-    };
-  }, []);
 
   const handleSaveInvite = async () => {
     let ok = true;
@@ -219,11 +169,7 @@ export default function GuardiansScreen() {
         });
         const inviteId = result.data.inviteId;
         const inviteToken = result.data.inviteToken ?? result.data.token ?? "";
-        inviteUrl =
-          result.data.inviteUrl ??
-          Linking.createURL("/GuardianInvite", {
-            queryParams: { inviteId, token: inviteToken },
-          });
+        inviteUrl = result.data.inviteUrl ?? guardianInviteUrl(inviteId, inviteToken);
         newbie = {
           ...newbie,
           connectionId: result.data.connectionId ?? result.data.inviteId,
@@ -286,36 +232,55 @@ export default function GuardiansScreen() {
   };
 
   const onResend = async (guardian: Guardian) => {
+    type InviteResult = {
+      connectionId?: string;
+      inviteId: string;
+      token?: string;
+      inviteToken: string;
+      inviteUrl?: string;
+    };
+    const invite = httpsCallable<Record<string, unknown>, InviteResult>(
+      functions,
+      "createGuardianInvite",
+    );
+    const fresh = {
+      displayName: guardian.name,
+      phone: guardian.phone,
+      relationship: guardian.relationship,
+    };
     try {
-      const result = await httpsCallable<
-        {
-          connectionId?: string;
-          displayName: string;
-          phone: string;
-          relationship: string;
-        },
-        {
-          connectionId?: string;
-          inviteId: string;
-          token?: string;
-          inviteToken: string;
-          inviteUrl?: string;
-        }
-      >(functions, "createGuardianInvite")({
-        connectionId: guardian.connectionId,
-        displayName: guardian.name,
-        phone: guardian.phone,
-        relationship: guardian.relationship,
-      });
+      let result;
+      try {
+        result = await invite(
+          guardian.connectionId ? { ...fresh, connectionId: guardian.connectionId } : fresh,
+        );
+      } catch (error) {
+        // Stale/revoked connection (or one created before the backend existed).
+        const code = (error as { code?: string }).code ?? "";
+        if (!guardian.connectionId || !/not-found/.test(code)) throw error;
+        result = await invite(fresh);
+      }
       const inviteId = result.data.inviteId;
       const inviteToken = result.data.inviteToken ?? result.data.token ?? "";
-      const inviteUrl =
-        result.data.inviteUrl ??
-        Linking.createURL("/GuardianInvite", {
-          queryParams: { inviteId, token: inviteToken },
-        });
+      const inviteUrl = result.data.inviteUrl ?? guardianInviteUrl(inviteId, inviteToken);
+      const connectionId = result.data.connectionId ?? inviteId;
+      if (connectionId !== guardian.connectionId) {
+        await persist(
+          guardians.map((g) =>
+            g.id === guardian.id
+              ? { ...g, connectionId, connectionStatus: "pending", verified: false }
+              : g,
+          ),
+        );
+      }
       await sendInvite(guardian, inviteUrl);
-    } catch {
+    } catch (error) {
+      const message = (error as { message?: string }).message ?? "";
+      if (/already connected/i.test(message)) {
+        Alert.alert("Already connected", `${guardian.name} is already your guardian.`);
+        return;
+      }
+      console.warn("Invite backend unavailable; sending plain SMS", error);
       await sendInvite(guardian);
     }
   };

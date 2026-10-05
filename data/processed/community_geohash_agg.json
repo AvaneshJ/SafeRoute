@@ -1,4 +1,13 @@
 {
-  "cells": [],
-  "generated_at_ms": 1791187649283
+  "cells": [
+    {
+      "cell": "19.14_72.85",
+      "latitude": 19.14,
+      "longitude": 72.85,
+      "communityRating": 5.0,
+      "verifiedIncidents30d": 0.0,
+      "historicalReports": 1
+    }
+  ],
+  "generated_at_ms": 1791196767758
 }

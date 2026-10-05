@@ -21,6 +21,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORTS_COLLECTION = "reports"
+REPORT_AUTHORS_COLLECTION = "report_authors"
 USERS_COLLECTION = "users"
 # Matches expireOldReports in functions/src/index.ts.
 LOOKBACK_DAYS = 180
@@ -103,6 +104,20 @@ def _trust_scores(db, user_ids: set[str]) -> dict[str, float]:
     return out
 
 
+def _report_authors(db, report_ids: list[str]) -> dict[str, str]:
+    """reportId -> author uid from the private report_authors mirror."""
+    refs = [db.collection(REPORT_AUTHORS_COLLECTION).document(rid) for rid in report_ids]
+    out: dict[str, str] = {}
+    for start in range(0, len(refs), 200):
+        for snap in db.get_all(refs[start : start + 200]):
+            if not snap.exists:
+                continue
+            author = (snap.to_dict() or {}).get("authorId")
+            if isinstance(author, str) and author:
+                out[snap.id] = author
+    return out
+
+
 def fetch_firestore_reports(lookback_days: int = LOOKBACK_DAYS) -> pd.DataFrame:
     """All non-rejected reports from the last `lookback_days`, with author trust attached."""
     from google.cloud.firestore_v1.base_query import FieldFilter
@@ -113,7 +128,6 @@ def fetch_firestore_reports(lookback_days: int = LOOKBACK_DAYS) -> pd.DataFrame:
     tz = _local_tz()
 
     rows: list[dict[str, Any]] = []
-    authors: dict[str, str] = {}
     query = db.collection(REPORTS_COLLECTION).where(
         filter=FieldFilter("createdAt", ">=", cutoff)
     )
@@ -131,9 +145,6 @@ def fetch_firestore_reports(lookback_days: int = LOOKBACK_DAYS) -> pd.DataFrame:
         created_dt = created if isinstance(created, datetime) else now
         if created_dt.tzinfo is None:
             created_dt = created_dt.replace(tzinfo=timezone.utc)
-        author = d.get("authorIdPrivate")
-        if isinstance(author, str) and author:
-            authors[snap.id] = author
         rows.append(
             {
                 "report_id": snap.id,
@@ -149,6 +160,7 @@ def fetch_firestore_reports(lookback_days: int = LOOKBACK_DAYS) -> pd.DataFrame:
             }
         )
 
+    authors = _report_authors(db, [row["report_id"] for row in rows])
     trust = _trust_scores(db, set(authors.values()))
     for row in rows:
         uid = authors.get(row["report_id"])

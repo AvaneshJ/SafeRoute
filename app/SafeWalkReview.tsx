@@ -17,6 +17,7 @@ import {
   notifyGuardianSms,
   safeWalkStartedMessage,
 } from "@/services/guardianAlerts";
+import { readGuardians } from "@/services/guardianSync";
 import { startSafetyTracking } from "@/services/safetyTracking";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -121,6 +122,10 @@ export default function SafeWalkReviewScreen() {
         /* use params */
       }
 
+      // Params can be stale; the synced list has the latest connection state.
+      const fresh = (await readGuardians()).find((g) => g.id === params.guardianId);
+      const selectedUserId =
+        fresh?.verified && fresh.guardianUserId ? fresh.guardianUserId : undefined;
       const started = await httpsCallable<
         Record<string, unknown>,
         {
@@ -131,21 +136,22 @@ export default function SafeWalkReviewScreen() {
         }
       >(functions, "startSafeWalk")({
         destination: { latitude: Number(params.destLat), longitude: Number(params.destLng) },
-        origin: { latitude: lat, longitude: lng },
-        destinationName: destTitle,
+        location: { latitude: lat, longitude: lng },
+        destinationLabel: destTitle,
         etaMinutes: Number(params.etaMin ?? etaMin) || 1,
-        guardianConnectionId: params.guardianConnectionId || null,
-        guardianUserId: params.guardianUserId || null,
-        guardianUserIds: params.guardianUserId ? [params.guardianUserId] : [],
+        ...(selectedUserId ? { guardianUserIds: [selectedUserId] } : {}),
         eventId: `walk-start-${Date.now()}`,
         walkerName,
       });
       sessionId = started.data.sessionId;
-      smsRequired =
+      const serverSms =
         started.data.delivery?.smsRequired ??
         started.data.smsRequired ??
         started.data.sms_required ??
         started.data.delivery?.channel === "sms_required";
+      // The server may fall back to other connected guardians; the one picked
+      // here still needs a text if they aren't connected.
+      smsRequired = Boolean(serverSms) || !selectedUserId;
       await startSafetyTracking("routes", sessionId);
     } catch (error) {
       console.warn("Online Safe Walk start unavailable; using SMS fallback.", error);

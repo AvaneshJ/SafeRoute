@@ -1,6 +1,7 @@
 import { PrimaryButton, UserAvatar } from "@/components/design-system";
 import { auth } from "@/config/firebase";
 import {
+  HELP_NEARBY_KEY,
   PRIVACY_ANON_KEY,
   PRIVACY_SHARE_KEY,
   SILENT_SOS_KEY,
@@ -20,6 +21,7 @@ import { useAppTheme } from "@/hooks/useAppTheme";
 import { useAuth } from "@/hooks/useAuth";
 import { useProductTour } from "@/hooks/useProductTour";
 import { unregisterCurrentPushToken } from "@/services/notifications";
+import { clearPresence, setHelpNearbyEnabled } from "@/services/presence";
 import {
   loadProfileStats,
   type ProfileAchievement,
@@ -159,6 +161,7 @@ export default function ProfileScreen() {
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const [anonLocation, setAnonLocation] = useState(true);
   const [shareGuardians, setShareGuardians] = useState(true);
+  const [helpNearby, setHelpNearby] = useState(true);
   const [stats, setStats] = useState<ProfileStats | null>(() => {
     const u = auth.currentUser;
     if (!u) return null;
@@ -207,14 +210,16 @@ export default function ProfileScreen() {
 
   useEffect(() => {
     void (async () => {
-      const [silent, anon, share] = await AsyncStorage.multiGet([
+      const [silent, anon, share, nearby] = await AsyncStorage.multiGet([
         SILENT_SOS_KEY,
         PRIVACY_ANON_KEY,
         PRIVACY_SHARE_KEY,
+        HELP_NEARBY_KEY,
       ]);
       setSilentSos(silent[1] === "true");
       setAnonLocation(anon[1] !== "false");
       setShareGuardians(share[1] !== "false");
+      setHelpNearby(nearby[1] !== "false");
     })();
   }, []);
 
@@ -244,6 +249,11 @@ export default function ProfileScreen() {
   const onAnonChange = (value: boolean) => {
     setAnonLocation(value);
     void AsyncStorage.setItem(PRIVACY_ANON_KEY, value ? "true" : "false");
+  };
+
+  const onHelpNearbyChange = (value: boolean) => {
+    setHelpNearby(value);
+    void setHelpNearbyEnabled(value).catch(console.warn);
   };
 
   const onShareChange = (value: boolean) => {
@@ -287,7 +297,7 @@ export default function ProfileScreen() {
           // Cap wait — Firestore unregister can hang (same as ensureUserProfile).
           try {
             await Promise.race([
-              unregisterCurrentPushToken(),
+              Promise.all([unregisterCurrentPushToken(), clearPresence()]),
               new Promise<void>((resolve) => setTimeout(resolve, 1500)),
             ]);
           } catch {
@@ -574,6 +584,19 @@ export default function ProfileScreen() {
                 trackColor={{ false: c.border, true: c.dangerContainer }}
                 thumbColor={silentSos ? c.danger : c.surfaceElevated}
                 accessibilityLabel="Silent SOS preference"
+              />
+            }
+          />
+          <SettingRow
+            title="Help people nearby"
+            subtitle="Get SOS alerts from SafeRoute users within 300 m while the app is open"
+            trailing={
+              <Switch
+                value={helpNearby}
+                onValueChange={onHelpNearbyChange}
+                trackColor={{ false: c.border, true: c.primaryContainer }}
+                thumbColor={helpNearby ? c.primary : c.surfaceElevated}
+                accessibilityLabel="Receive nearby SOS alerts"
               />
             }
           />

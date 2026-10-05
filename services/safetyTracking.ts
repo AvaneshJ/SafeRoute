@@ -1,8 +1,13 @@
-import { auth } from "@/config/firebase";
+import { auth, db } from "@/config/firebase";
+import { downsamplePath } from "@/core/guardianSafety";
+import { doc, serverTimestamp, setDoc } from "firebase/firestore";
 import {
+  haltSafetyTracking,
+  isTrackedSessionOpen,
   SAFETY_LOCATION_TASK,
   TRACKING_PAYLOAD_KEY,
   type TrackingPayload,
+  type TrackingProgress,
   writeTrackedLocation,
 } from "@/tasks/locationTracking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -12,9 +17,30 @@ import * as TaskManager from "expo-task-manager";
 export async function publishSafetyLocation(
   payload: TrackingPayload,
   location: Location.LocationObject,
+  progress?: TrackingProgress,
 ): Promise<void> {
   if (auth.currentUser?.uid !== payload.userId) return;
-  await writeTrackedLocation(payload, location, "foreground");
+  await writeTrackedLocation(payload, location, "foreground", progress);
+}
+
+/** Attaches the planned route to live/current so guardians can draw it. */
+export async function publishSafetyRoute(
+  payload: TrackingPayload,
+  path: Array<{ latitude: number; longitude: number }>,
+): Promise<void> {
+  if (auth.currentUser?.uid !== payload.userId || path.length < 2) return;
+  await setDoc(
+    doc(db, payload.collection, payload.sessionId, "live", "current"),
+    {
+      ownerId: payload.userId,
+      routePath: downsamplePath(path, 300).map((p) => ({
+        latitude: Math.round(p.latitude * 1e6) / 1e6,
+        longitude: Math.round(p.longitude * 1e6) / 1e6,
+      })),
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
 }
 
 export async function startSafetyTracking(
@@ -72,12 +98,32 @@ export async function startSafetyTracking(
 }
 
 export async function stopSafetyTracking(): Promise<void> {
-  try {
-    const running = await TaskManager.isTaskRegisteredAsync(
-      SAFETY_LOCATION_TASK,
-    );
-    if (running) await Location.stopLocationUpdatesAsync(SAFETY_LOCATION_TASK);
-  } finally {
-    await AsyncStorage.removeItem(TRACKING_PAYLOAD_KEY);
+  await haltSafetyTracking();
+}
+
+/**
+ * Stops leftover tracking from a session that was closed elsewhere (server expiry,
+ * another device, a crash before cleanup). Run once auth is restored.
+ */
+export async function reconcileSafetyTracking(): Promise<void> {
+  const raw = await AsyncStorage.getItem(TRACKING_PAYLOAD_KEY);
+  if (!raw) {
+    if (await TaskManager.isTaskRegisteredAsync(SAFETY_LOCATION_TASK)) {
+      await haltSafetyTracking();
+    }
+    return;
   }
+  let payload: TrackingPayload;
+  try {
+    payload = JSON.parse(raw) as TrackingPayload;
+  } catch {
+    await haltSafetyTracking();
+    return;
+  }
+  const uid = auth.currentUser?.uid;
+  if (uid && uid !== payload.userId) {
+    await haltSafetyTracking();
+    return;
+  }
+  if ((await isTrackedSessionOpen(payload)) === false) await haltSafetyTracking();
 }

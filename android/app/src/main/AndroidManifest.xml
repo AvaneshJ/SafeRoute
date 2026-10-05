@@ -46,6 +46,13 @@
         <data android:scheme="saferoute"/>
         <data android:scheme="exp+saferoute"/>
       </intent-filter>
+      <intent-filter android:autoVerify="true" data-generated="true">
+        <action android:name="android.intent.action.VIEW"/>
+        <data android:scheme="https" android:host="saferoute-8bc4f.web.app" android:pathPrefix="/invite"/>
+        <data android:scheme="https" android:host="saferoute-8bc4f.firebaseapp.com" android:pathPrefix="/invite"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+      </intent-filter>
     </activity>
     <uses-library android:name="org.apache.http.legacy" android:required="false"/>
   </application>

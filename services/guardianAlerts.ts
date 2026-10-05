@@ -104,7 +104,7 @@ export function guardianInviteMessage(input: {
   return (
     `Hi ${input.guardianName}, I've added you as a Trusted Guardian on SafeRoute. ` +
     (input.inviteUrl
-      ? `Open SafeRoute to accept: ${input.inviteUrl} `
+      ? `Tap to accept: ${input.inviteUrl} `
       : "") +
     `If I start a Safe Walk or need help, you may get alerts with my map location. ` +
     `Please keep an eye out. — Sent via SafeRoute`

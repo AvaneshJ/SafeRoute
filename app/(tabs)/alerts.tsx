@@ -8,6 +8,7 @@ import {
   tabContentBottomInset,
   typography,
 } from "@/constants/theme";
+import { GuardianWatchList } from "@/components/guardian/GuardianWatchList";
 import { useAlertsBadge } from "@/hooks/useAlertsBadge";
 import { useAppTheme } from "@/hooks/useAppTheme";
 import { auth, db, functions } from "@/config/firebase";
@@ -37,15 +38,21 @@ const INITIAL: Notif[] = [];
 
 function sectionFor(type: string): Exclude<SectionId, "all"> {
   if (type.includes("sos") || type.includes("emergency")) return "emergency";
-  if (type.includes("walk") || type.includes("arrival") || type.includes("checkin")) return "safewalk";
+  if (type.startsWith("safety_") || type.includes("walk") || type.includes("live_share")) {
+    return "safewalk";
+  }
+  if (type.includes("arriv") || type.includes("checkin")) return "safewalk";
   if (type.includes("report") || type.includes("community")) return "community";
   return "safety";
 }
 
 function toneFor(type: string): NotificationTone {
+  if (type.includes("resolved")) return "success";
   if (type.includes("sos") || type.includes("failed")) return "danger";
-  if (type.includes("arrival") || type.includes("accepted")) return "success";
-  if (type.includes("checkin")) return "warning";
+  if (type.includes("arriv") || type.includes("accepted") || type.includes("acknowledged")) {
+    return "success";
+  }
+  if (type.includes("checkin") || type.includes("invite")) return "warning";
   return "info";
 }
 
@@ -233,6 +240,8 @@ export default function AlertsScreen() {
             );
           })}
         </ScrollView>
+
+        <GuardianWatchList />
 
         {visibleSections.map((section) => {
           const sectionItems = items.filter((i) => i.section === section.id);

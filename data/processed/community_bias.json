@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "generated_at_ms": 1791187649283,
+  "generated_at_ms": 1791196767758,
   "source": "firestore",
   "spread_m": 150.0,
   "max_bias": 40.0,
@@ -15,9 +15,11 @@
     19,
     6
   ],
-  "reports_total": 0,
-  "reports_used": 0,
-  "reports_by_category": {},
+  "reports_total": 1,
+  "reports_used": 1,
+  "reports_by_category": {
+    "other": 1
+  },
   "roads_affected": 0,
   "bias": {},
   "bias_day": {},
