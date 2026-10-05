@@ -1,8 +1,9 @@
 """
 Phase 6 — Time-aware risk + temporary hazard decay.
 
-Risk_final = Risk_ML × TimeWeight
-Hazard weight = exp(−λ t)  (half-life ≈ 36 h → ~60% at 24 h, ~20% at 72 h)
+Edge safety(h) = lerp(safety_day, safety_night, night_factor(h)) − hazard_penalty
+Risk_final     = (1 − safety(h)/100) × TimeWeight(h)
+Hazard weight  = exp(−λ t)  (half-life ≈ 36 h → ~60% at 24 h, ~20% at 72 h)
 """
 from __future__ import annotations
 
@@ -22,6 +23,46 @@ HAZARDS_JSON = PROCESSED / "temporary_hazards.json"
 HAZARD_LAMBDA_PER_HOUR = -math.log(0.60) / 24.0
 HAZARD_EXPIRE_HOURS = 168.0  # 7 days
 
+# Feature weights (lighting, police proximity, 1 − crime). The static CSV score
+# uses 0.35/0.35/0.30; by day lighting barely matters, after dark it dominates.
+DAY_WEIGHTS = (0.15, 0.40, 0.45)
+NIGHT_WEIGHTS = (0.45, 0.30, 0.25)
+STATIC_WEIGHTS = (0.35, 0.35, 0.30)
+
+# Mumbai twilight (IST): dark ≈ 19:00–05:30 year-round within ±30 min.
+DUSK_START, DUSK_END = 17.5, 19.5
+DAWN_START, DAWN_END = 5.0, 7.0
+
+
+def current_local_hour() -> float:
+    from ml.local_time import local_hour_now
+
+    return local_hour_now()
+
+
+def night_factor(hour: float | None = None) -> float:
+    """0 in daylight, 1 after dark, linear ramps across dusk and dawn."""
+    h = (current_local_hour() if hour is None else float(hour)) % 24.0
+    if DAWN_END <= h <= DUSK_START:
+        return 0.0
+    if DUSK_START < h < DUSK_END:
+        return (h - DUSK_START) / (DUSK_END - DUSK_START)
+    if DAWN_START < h < DAWN_END:
+        return 1.0 - (h - DAWN_START) / (DAWN_END - DAWN_START)
+    return 1.0
+
+
+def edge_safety_at(attrs: Any, nf: float) -> float:
+    """Safety of one edge for a given night_factor, including active hazards."""
+    day = getattr(attrs, "safety_day", None)
+    night = getattr(attrs, "safety_night", None)
+    if day is None or night is None:
+        s = float(attrs.safety)
+    else:
+        s = float(day) + float(nf) * (float(night) - float(day))
+    penalty = float(getattr(attrs, "hazard_penalty", 0.0) or 0.0)
+    return max(0.0, min(100.0, s - penalty))
+
 
 def time_weight(hour: float | None = None) -> float:
     """
@@ -30,9 +71,7 @@ def time_weight(hour: float | None = None) -> float:
     8 AM → 1.0, 6 PM → 1.1, 10 PM → 1.35, 1 AM → 1.55
     """
     if hour is None:
-        from datetime import datetime
-
-        hour = datetime.now().hour + datetime.now().minute / 60.0
+        hour = current_local_hour()
     h = float(hour) % 24.0
 
     # Anchor points (hour, weight)

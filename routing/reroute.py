@@ -10,7 +10,7 @@ from typing import Any
 from .astar_router import RouteResult, astar_route, haversine_m, result_to_dict
 from .dynamic_risk import TemporaryHazard, active_hazards, hazard_bias_near
 from .explain_route import explain_route_result
-from .graph_builder import RoutingGraph
+from .graph_builder import RoutingGraph, snap_to_node
 
 
 def hazard_ahead_of_route(
@@ -57,28 +57,29 @@ def hazard_ahead_of_route(
 
 def apply_hazard_penalties_to_graph(rg: RoutingGraph) -> int:
     """
-    Temporarily lower edge safety near active hazards (in-place).
-    Returns number of edges touched.
+    Recompute attrs.hazard_penalty from the current active hazard set.
+    Kept separate from safety so repeated reroutes don't compound penalties.
+    Returns number of edges penalised.
     """
     touched = 0
     hazards = active_hazards()
-    if not hazards:
-        return 0
     for _u, _v, data in rg.graph.edges(data=True):
         attrs = data.get("attrs")
         if attrs is None:
             continue
+        if not hazards:
+            attrs.hazard_penalty = 0.0
+            continue
         coords = getattr(attrs, "coords", None) or []
         if not coords:
+            attrs.hazard_penalty = 0.0
             continue
         mid = coords[len(coords) // 2]
         lat, lon = float(mid[0]), float(mid[1])
         penalty = hazard_bias_near(lat, lon, hazards)
-        if penalty <= 0.5:
-            continue
-        base = float(attrs.safety)
-        attrs.safety = max(0.0, base - penalty)
-        touched += 1
+        attrs.hazard_penalty = penalty if penalty > 0.5 else 0.0
+        if attrs.hazard_penalty:
+            touched += 1
     return touched
 
 
@@ -122,9 +123,12 @@ def live_reroute(
         message = "Safer route available"
         detail = f"Conditions ahead changed. +{delta} safety"
 
-    explanation = explain_route_result(rg, new_route)
+    explanation = explain_route_result(rg, new_route, path=new_route.path, hour=new_route.hour)
+    # Large snaps mean the walker is on a street the safety graph doesn't model.
+    _, origin_snap_m = snap_to_node(rg, position[0], position[1])
 
     return {
+        "origin_snap_m": round(origin_snap_m, 1),
         "offer": offer,
         "message": message,
         "detail": detail,

@@ -39,20 +39,33 @@ _model_bundle: dict[str, Any] | None = None
 _feature_table: pd.DataFrame | None = None
 _ml_by_road: dict[str, float] | None = None
 _rule_by_road: dict[str, float] | None = None
-_community_bias: dict[str, float] | None = None
+_community_bias: tuple[dict[str, float], dict[str, float]] | None = None
 
 
-def load_community_bias_cached(force: bool = False) -> dict[str, float]:
+def load_community_bias_cached(force: bool = False) -> tuple[dict[str, float], dict[str, float]]:
+    """(day, night) community bias maps."""
     global _community_bias
     if _community_bias is not None and not force:
         return _community_bias
     try:
-        from .community_intelligence import load_community_bias
+        from .community_intelligence import load_community_bias_layers
 
-        _community_bias = load_community_bias()
-    except Exception:
-        _community_bias = {}
+        _community_bias = load_community_bias_layers()
+    except Exception as exc:  # noqa: BLE001
+        print(f"  community bias unavailable ({exc})", flush=True)
+        _community_bias = ({}, {})
     return _community_bias
+
+
+def reload_data(*, scores: bool = True, bias: bool = True) -> None:
+    """Drop cached CSV / predictions / bias so the next apply re-reads disk."""
+    global _feature_table, _ml_by_road, _rule_by_road, _community_bias
+    if scores:
+        _feature_table = None
+        _ml_by_road = None
+        _rule_by_road = None
+    if bias:
+        _community_bias = None
 
 
 def police_score(dist_m: float) -> float:
@@ -190,17 +203,47 @@ def _base_road_id(edge_road_id: str) -> str:
     return str(edge_road_id).split(":", 1)[0]
 
 
+def _time_shift_maps(table: pd.DataFrame) -> tuple[dict[str, float], dict[str, float]]:
+    """
+    Per road: how much the rule score moves when re-weighted for day / night,
+    relative to the static 0.35/0.35/0.30 score the model was trained on.
+    """
+    from routing.dynamic_risk import DAY_WEIGHTS, NIGHT_WEIGHTS, STATIC_WEIGHTS
+
+    L = table["lighting_score"].astype(float).clip(0.0, 1.0)
+    P = table["police_dist"].astype(float).map(police_score)
+    C = 1.0 - table["crime_score"].astype(float).clip(0.0, 100.0) / 100.0
+
+    def score(w: tuple[float, float, float]) -> pd.Series:
+        return 100.0 * (w[0] * L + w[1] * P + w[2] * C)
+
+    static = score(STATIC_WEIGHTS)
+    ids = table.index.astype(str)
+    # Zero-mean: re-weighting only re-ranks roads; the overall after-dark risk
+    # increase comes from dynamic_risk.time_weight.
+    day_shift = score(DAY_WEIGHTS) - static
+    night_shift = score(NIGHT_WEIGHTS) - static
+    day = dict(zip(ids, (day_shift - day_shift.mean()).round(2)))
+    night = dict(zip(ids, (night_shift - night_shift.mean()).round(2)))
+    return day, night
+
+
 def apply_safety_to_graph(
     rg: Any,
     engine: SafetyEngine = "xgboost",
     model_path: Path = MODEL_PATH,
 ) -> dict[str, Any]:
     """
-    Mutate edge attrs.safety used by A*.
+    Set per-edge safety used by A*:
 
+      safety_day / safety_night = base + time-of-day shift − community bias
+      safety                    = value at the current Mumbai hour (legacy readers)
+
+    `base` is the XGBoost prediction (or rule score if the model can't load).
     Always preserves attrs.safety_rule (CSV rule-engine score).
-    Falls back to rule if XGBoost cannot load.
     """
+    from routing.dynamic_risk import edge_safety_at, night_factor
+
     t0 = time.time()
     used: SafetyEngine = engine if engine != "compare" else "xgboost"
 
@@ -208,8 +251,12 @@ def apply_safety_to_graph(
     if used == "xgboost" and not ml_ok:
         used = "rule"
 
+    table = load_feature_table()
+    shift_day, shift_night = _time_shift_maps(table)
+    lighting = table["lighting_score"].astype(float).to_dict()
     score_map = rule_by_road if used == "rule" else ml_by_road
-    bias_map = load_community_bias_cached()
+    bias_day_map, bias_night_map = load_community_bias_cached()
+    nf_now = night_factor()
     biased_roads = 0
 
     updated = 0
@@ -223,14 +270,17 @@ def apply_safety_to_graph(
             rule = float(getattr(attrs, "safety_rule", None) or attrs.safety)
         attrs.safety_rule = rule
         base = float(score_map.get(base_id, rule))
-        bias = float(bias_map.get(base_id, 0.0))
-        if bias > 0:
+        b_day = float(bias_day_map.get(base_id, 0.0))
+        b_night = float(bias_night_map.get(base_id, 0.0))
+        if b_day > 0 or b_night > 0:
             biased_roads += 1
-            from .community_intelligence import apply_bias_to_score
-
-            attrs.safety = apply_bias_to_score(base, bias)
-        else:
-            attrs.safety = base
+        attrs.bias_day = b_day
+        attrs.bias_night = b_night
+        attrs.safety_day = max(0.0, min(100.0, base + shift_day.get(base_id, 0.0) - b_day))
+        attrs.safety_night = max(0.0, min(100.0, base + shift_night.get(base_id, 0.0) - b_night))
+        if base_id in lighting:
+            attrs.lighting_score = float(lighting[base_id])
+        attrs.safety = edge_safety_at(attrs, nf_now)
         updated += 1
 
     meta = {
@@ -239,7 +289,7 @@ def apply_safety_to_graph(
         "ml_loaded": ml_ok,
         "edges_updated": updated,
         "community_bias_roads": biased_roads,
-        "community_bias_loaded": bool(bias_map),
+        "community_bias_loaded": bool(bias_day_map or bias_night_map),
         "apply_s": round(time.time() - t0, 2),
     }
     rg.meta.update(meta)

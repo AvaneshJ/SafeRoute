@@ -6,6 +6,7 @@
  */
 import { Platform } from "react-native";
 import Constants from "expo-constants";
+import { synthesizeTurnSteps, type NavStep } from "@/core/liveNavigation";
 
 export type SafeRouteMode = "safest" | "balanced" | "fastest" | "all";
 
@@ -39,6 +40,10 @@ export type SafeRouteCard = {
     title?: string;
     reasons?: RouteReason[];
     confidence?: ConfidenceDetail;
+    stats?: {
+      lighting_pct?: number;
+      [key: string]: unknown;
+    };
   };
   confidence_detail?: ConfidenceDetail;
 };
@@ -61,6 +66,8 @@ export type RerouteResponse = {
   edges_penalized: number;
   route: SafeRouteCard;
   explanation?: SafeRouteCard["explanation"];
+  /** How far the position had to snap to the safety road graph (m). */
+  origin_snap_m?: number;
 };
 
 export const ROUTE_KIND_COLORS: Record<"safest" | "balanced" | "fastest", string> =
@@ -161,9 +168,11 @@ export async function fetchLiveReroute(body: {
   mode?: SafeRouteMode;
   currentPolyline?: { latitude: number; longitude: number }[];
   currentSafety?: number;
+  signal?: AbortSignal;
 }): Promise<RerouteResponse> {
   const base = getRoutingApiBaseUrl();
   const res = await fetch(`${base}/route/reroute`, {
+    signal: body.signal,
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -190,29 +199,11 @@ export async function fetchLiveReroute(body: {
   return res.json();
 }
 
+/** Turn-by-turn steps for a SafeRoute polyline, derived from its geometry. */
 export function polylineToNavSteps(
   polyline: { latitude: number; longitude: number }[],
   distanceM = 0,
   etaMinutes = 0,
-): {
-  instruction: string;
-  maneuver: string | null;
-  distanceMeters: number;
-  durationSeconds: number;
-  start: { latitude: number; longitude: number };
-  end: { latitude: number; longitude: number };
-  coordinates: { latitude: number; longitude: number }[];
-}[] {
-  if (polyline.length < 2) return [];
-  return [
-    {
-      instruction: "Follow the highlighted SafeRoute path",
-      maneuver: null,
-      distanceMeters: distanceM,
-      durationSeconds: Math.round(etaMinutes * 60),
-      start: polyline[0],
-      end: polyline[polyline.length - 1],
-      coordinates: polyline,
-    },
-  ];
+): NavStep[] {
+  return synthesizeTurnSteps(polyline, distanceM, etaMinutes);
 }

@@ -43,8 +43,9 @@ def _path_metrics(
     rg: RoutingGraph, path: list[tuple[int, int]], alpha: float, hour: float | None = None
 ) -> tuple[float, float, float, list[list[float]]]:
     """Aggregate distance, length-weighted (time-adjusted) safety, total cost, polyline."""
-    from .dynamic_risk import time_adjusted_safety
+    from .dynamic_risk import edge_safety_at, night_factor, time_adjusted_safety
 
+    nf = night_factor(hour)
     if len(path) < 2:
         node = path[0] if path else None
         ll = rg.node_latlng.get(node, (0.0, 0.0)) if node else (0.0, 0.0)
@@ -67,7 +68,7 @@ def _path_metrics(
             coords = [(lat1, lon1), (lat2, lon2)]
         else:
             length = float(attrs.length_m)
-            safety = float(attrs.safety)
+            safety = edge_safety_at(attrs, nf)
             coords = list(attrs.coords)
 
         adj = time_adjusted_safety(safety, hour)
@@ -97,15 +98,19 @@ def astar_route(
     origin / destination: (lat, lon)
     hour: optional local hour for time-aware risk (Phase 6)
     """
-    from .dynamic_risk import time_adjusted_safety, time_weight
+    from .dynamic_risk import (
+        current_local_hour,
+        edge_safety_at,
+        night_factor,
+        time_adjusted_safety,
+    )
 
     alpha = mode_alpha(mode)
     o_lat, o_lon = float(origin[0]), float(origin[1])
     d_lat, d_lon = float(destination[0]), float(destination[1])
     if hour is None:
-        from datetime import datetime
-
-        hour = datetime.now().hour + datetime.now().minute / 60.0
+        hour = current_local_hour()
+    nf = night_factor(hour)
 
     src, src_snap = snap_to_node(rg, o_lat, o_lon)
     dst, dst_snap = snap_to_node(rg, d_lat, d_lon)
@@ -133,13 +138,12 @@ def astar_route(
         )
 
     goal_lat, goal_lon = rg.node_latlng[dst]
-    _ = time_weight(hour)  # documented in meta via hour
 
     def weight(u, v, data):
         attrs = data.get("attrs")
         if attrs is None:
             return float(data.get("weight", 1.0))
-        adj = time_adjusted_safety(attrs.safety, hour)
+        adj = time_adjusted_safety(edge_safety_at(attrs, nf), hour)
         return edge_cost(attrs.length_m, adj, alpha)
 
     def heuristic(u, v=None):

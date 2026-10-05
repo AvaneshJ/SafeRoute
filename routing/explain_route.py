@@ -7,7 +7,13 @@ from typing import Any
 
 from .astar_router import RouteResult, haversine_m
 from .confidence import estimate_confidence_from_path_stats
-from .dynamic_risk import active_hazards, time_adjusted_safety, time_weight
+from .dynamic_risk import (
+    active_hazards,
+    edge_safety_at,
+    night_factor,
+    time_adjusted_safety,
+    time_weight,
+)
 from .graph_builder import RoutingGraph
 
 
@@ -50,6 +56,7 @@ def analyze_path(
     with_police = 0
     community_biased = 0
     n = 0
+    nf = night_factor(hour)
 
     for u, v in zip(path[:-1], path[1:]):
         data = rg.graph.get_edge_data(u, v) or {}
@@ -62,8 +69,10 @@ def analyze_path(
         lighting = float(getattr(attrs, "lighting_score", 0.5) or 0.5)
         police = float(getattr(attrs, "police_dist", 2000) or 2000)
         crime = float(getattr(attrs, "crime_score", 50) or 50)
-        safety = float(attrs.safety)
+        safety = edge_safety_at(attrs, nf)
         rule = float(getattr(attrs, "safety_rule", None) or safety)
+        bias_day = float(getattr(attrs, "bias_day", 0.0) or 0.0)
+        bias = bias_day + nf * (float(getattr(attrs, "bias_night", 0.0) or 0.0) - bias_day)
         n += 1
         dist += length
         light_m += lighting * length
@@ -81,7 +90,7 @@ def analyze_path(
             high_crime += 1
         if lighting < 0.35:
             low_light += 1
-        if abs(safety - rule) > 2.0:
+        if bias > 2.0:
             community_biased += 1
 
     mean_light = light_m / dist if dist else 0.5
@@ -121,6 +130,7 @@ def analyze_path(
         "nearby_active_hazards": hazard_hits,
         "distance_m": round(dist, 1),
         "time_weight": round(tw, 3),
+        "night_factor": round(nf, 2),
         "time_adjusted_safety": round(adj, 1),
     }
 

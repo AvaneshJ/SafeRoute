@@ -60,3 +60,4 @@ data/processed/**
 !data/processed/community_geohash_agg.json
 !data/processed/community_reports.csv
 !data/processed/road_safety_scores.csv
+!data/processed/lighting_meta.json

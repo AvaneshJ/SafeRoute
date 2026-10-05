@@ -6,6 +6,7 @@ import { AuthProvider, useAuth } from "@/hooks/useAuth";
 import { useNotificationBootstrap } from "@/hooks/useNotificationBootstrap";
 import { ProductTourProvider } from "@/hooks/useProductTour";
 import "@/tasks/locationTracking";
+import "@/tasks/navigationLocation";
 import {
   Inter_400Regular,
   Inter_500Medium,

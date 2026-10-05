@@ -7,11 +7,27 @@ import {
   useRoute,
 } from "expo-router/react-navigation";
 import Constants from "expo-constants";
+import * as Haptics from "expo-haptics";
 import * as Linking from "expo-linking";
 import * as Location from "expo-location";
 import { useRouter } from "expo-router";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Animated, Share, StatusBar, Text, View } from "react-native";
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  Alert,
+  Animated,
+  AppState,
+  Share,
+  StatusBar,
+  Text,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 // Import all custom components
@@ -26,7 +42,10 @@ import DirectionsModal from "../../components/maps/DirectionModal";
 import LoadingOverlay from "../../components/maps/LoadingOverlay";
 import LongPressInstruction from "../../components/maps/LongPressInstruction";
 import MapDisplay from "../../components/maps/MapDisplay";
-import { LiveNavigationHUD } from "../../components/navigation/LiveNavigationHUD";
+import {
+  LiveNavigationHUD,
+  type LiveNavRouteAlert,
+} from "../../components/navigation/LiveNavigationHUD";
 import {
   GUARDIANS_STORAGE_KEY,
   createGuardianId,
@@ -38,11 +57,23 @@ import SafetyReviewModal from "../../components/maps/SafetyReviewModal";
 import SearchBar from "../../components/maps/SearchBar";
 import { mapNavigateRoutesToComparison } from "../../components/route/mapNavigateRoutes";
 import {
+  haversineMeters,
   mapGoogleStepToNavStep,
+  stepsToRouteCoordinates,
   updateLiveNavigation,
   type LiveNavSnapshot,
   type NavStep,
 } from "../../core/liveNavigation";
+import { PipNavigationCard } from "../../components/navigation/PipNavigationCard";
+import {
+  setAutoPictureInPicture,
+  useIsInPictureInPicture,
+} from "@/modules/navigation-pip";
+import {
+  startNavigationBackgroundUpdates,
+  stopNavigationBackgroundUpdates,
+  subscribeNavigationLocations,
+} from "@/tasks/navigationLocation";
 import {
   buildReviewDetailPins,
   buildSafetyHeatLayer,
@@ -61,6 +92,7 @@ import {
 import {
   ROUTE_KIND_COLORS,
   ROUTE_KIND_LABELS,
+  fetchLiveReroute,
   fetchSafeRoutes,
   polylineToNavSteps,
 } from "@/services/safeRouteApi";
@@ -118,6 +150,16 @@ interface RouteInfo extends RouteDraft {
   mode?: "safest" | "balanced" | "fastest";
 }
 
+/** Reroute after this many consecutive off-route fixes (filters GPS jitter)… */
+const REROUTE_AFTER_OFF_ROUTE_FIXES = 3;
+/** …or immediately once this far from the route. */
+const REROUTE_FORCE_DISTANCE_M = 100;
+const REROUTE_COOLDOWN_MS = 25_000;
+/** Snap distance to the safety graph beyond which a street counts as unmodelled. */
+const UNKNOWN_STREET_SNAP_M = 80;
+/** Refetch community reports only after moving this far. */
+const SAFETY_DATA_RELOAD_M = 500;
+
 const SafeMaps = () => {
   // --- Navigation Hooks ---
   const route = useRoute() as { params?: Record<string, any> };
@@ -139,9 +181,10 @@ const SafeMaps = () => {
     null,
   ); // Current city/region name
 
-  // NEW: State for location watcher subscription
-  const [locationWatcher, setLocationWatcher] =
-    useState<Location.LocationSubscription | null>(null);
+  // Kept in a ref so callbacks created in earlier renders still see the live watcher.
+  const locationWatcherRef = useRef<Location.LocationSubscription | null>(
+    null,
+  );
 
   // --- State for Search Functionality ---
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -164,6 +207,8 @@ const SafeMaps = () => {
   const [primaryGuardian, setPrimaryGuardian] = useState<Guardian | null>(null);
   const [guardianConnected, setGuardianConnected] = useState(false);
   const router = useRouter();
+  const isInPip = useIsInPictureInPicture();
+  const showPipLayout = isInPip && isNavigationMode;
 
   /** Live GMaps-style navigation progress (updated by GPS watcher). */
   const [liveNav, setLiveNav] = useState<LiveNavSnapshot | null>(null);
@@ -174,6 +219,24 @@ const SafeMaps = () => {
   const arrivedAlertedRef = useRef(false);
   const navShareSessionRef = useRef("");
   const navShareUploadAtRef = useRef(0);
+  const navAlongRef = useRef<number | null>(null);
+  const lastFixTimestampRef = useRef(0);
+  const isNavigationModeRef = useRef(false);
+  const destinationRef = useRef<Coordinate | null>(null);
+  const routeModeRef = useRef<"safest" | "balanced" | "fastest">("safest");
+  /** Google fallback after leaving the safety graph — keep the warning up. */
+  const offSafetyGraphRef = useRef(false);
+  const offRouteFixesRef = useRef(0);
+  const rerouteInFlightRef = useRef(false);
+  const lastRerouteAtRef = useRef(0);
+  const routeAlertTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const [routeAlert, setRouteAlert] = useState<LiveNavRouteAlert | null>(null);
+  const lastHandledDestinationKeyRef = useRef<string | null>(null);
+  const lastNearbyRequestKeyRef = useRef<string | null>(null);
+  const lastSafetyLoadAtRef = useRef<Coordinate | null>(null);
+  const stopNavigationRef = useRef<() => void>(() => {});
 
   // NEW: State to hold navigation params for a pending route calculation
   const [pendingNavigationRoute, setPendingNavigationRoute] = useState<
@@ -336,18 +399,23 @@ const SafeMaps = () => {
     void loadSafetyData(null);
   }, [loadSafetyData]);
 
-  // Refresh community heat when GPS is ready
+  // Refresh community heat when GPS is ready, then only after real movement
+  // (navigation delivers a fix every few metres).
   useEffect(() => {
     if (!location) return;
-    void loadSafetyData({
+    const here = {
       latitude: location.coords.latitude,
       longitude: location.coords.longitude,
-    });
+    };
+    const last = lastSafetyLoadAtRef.current;
+    if (last && haversineMeters(last, here) < SAFETY_DATA_RELOAD_M) return;
+    lastSafetyLoadAtRef.current = here;
+    void loadSafetyData(here);
   }, [location, loadSafetyData]);
 
-  // Set initial map region when location is available
+  // Seed the map region once; afterwards onRegionChangeComplete owns it.
   useEffect(() => {
-    if (location) {
+    if (location && !mapRegion) {
       setMapRegion({
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
@@ -355,7 +423,7 @@ const SafeMaps = () => {
         longitudeDelta: 0.0421,
       });
     }
-  }, [location]);
+  }, [location, mapRegion]);
 
   // Long-press tip: first map open only (persisted — never again after seen/dismissed)
   useEffect(() => {
@@ -397,6 +465,21 @@ const SafeMaps = () => {
   // Effect to trigger nearby search based on navigation route parameters (from Home screen)
   useEffect(() => {
     if (location && (showPoliceStations || showHospitals)) {
+      // Params can survive setParams(undefined) in expo-router; never re-run a
+      // request we already handled, and never tear down an active trip.
+      const requestKey = `${showPoliceStations ?? ""}|${showHospitals ?? ""}|${
+        route.params?.nearbyNonce ?? ""
+      }`;
+      const alreadyHandled = lastNearbyRequestKeyRef.current === requestKey;
+      lastNearbyRequestKeyRef.current = requestKey;
+      if (alreadyHandled || isNavigationModeRef.current) {
+        navigation.setParams({
+          showPoliceStations: undefined,
+          showHospitals: undefined,
+        });
+        return;
+      }
+
       // Clear any existing route/search results when a nearby search is triggered
       setRouteCoordinates([]);
       setRouteInfo(null);
@@ -422,13 +505,30 @@ const SafeMaps = () => {
         showHospitals: undefined,
       });
     }
-  }, [location, showPoliceStations, showHospitals, navigation]);
+  }, [
+    location,
+    showPoliceStations,
+    showHospitals,
+    navigation,
+    route.params?.nearbyNonce,
+  ]);
 
   // Effect to capture navigation parameters from SavedPlacesScreen / Destination Search
+  // This re-runs on every tab focus, and expo-router may keep params after
+  // setParams(undefined) — so only act on a destination we haven't seen yet.
   useFocusEffect(
     useCallback(() => {
       const params = route.params as Record<string, unknown> | undefined;
       if (!params) return;
+
+      const isNewDestination = (coord: Coordinate, title: unknown) => {
+        const key = `${coord.latitude},${coord.longitude}|${String(
+          title ?? "",
+        )}|${String(params.selectedPlaceNonce ?? "")}`;
+        if (lastHandledDestinationKeyRef.current === key) return false;
+        lastHandledDestinationKeyRef.current = key;
+        return true;
+      };
 
       if (params.selectedPlaceForMap) {
         const {
@@ -441,47 +541,49 @@ const SafeMaps = () => {
           selectedPlaceSubtitle: string;
         };
 
-        setPendingNavigationRoute({
-          coordinate: selectedPlaceForMap,
-          title: selectedPlaceTitle,
-          subtitle: selectedPlaceSubtitle,
-        });
-
         navigation.setParams({
           selectedPlaceForMap: undefined,
           selectedPlaceTitle: undefined,
           selectedPlaceSubtitle: undefined,
         });
+        if (!isNewDestination(selectedPlaceForMap, selectedPlaceTitle)) return;
+
+        setPendingNavigationRoute({
+          coordinate: selectedPlaceForMap,
+          title: selectedPlaceTitle,
+          subtitle: selectedPlaceSubtitle,
+        });
         return;
       }
 
       if (params.selectedPlaceLat != null && params.selectedPlaceLng != null) {
-        setPendingNavigationRoute({
-          coordinate: {
-            latitude: Number(params.selectedPlaceLat),
-            longitude: Number(params.selectedPlaceLng),
-          },
-          title: String(params.selectedPlaceTitle ?? "Destination"),
-          subtitle: String(params.selectedPlaceSubtitle ?? ""),
-        });
+        const coordinate = {
+          latitude: Number(params.selectedPlaceLat),
+          longitude: Number(params.selectedPlaceLng),
+        };
+        const title = String(params.selectedPlaceTitle ?? "Destination");
+        const subtitle = String(params.selectedPlaceSubtitle ?? "");
         navigation.setParams({
           selectedPlaceLat: undefined,
           selectedPlaceLng: undefined,
           selectedPlaceTitle: undefined,
           selectedPlaceSubtitle: undefined,
+          selectedPlaceNonce: undefined,
         } as never);
+        if (!isNewDestination(coordinate, title)) return;
+        setPendingNavigationRoute({ coordinate, title, subtitle });
       }
     }, [route.params, navigation]),
   );
 
-  // Effect to clean up location watcher when component unmounts
   useEffect(() => {
     return () => {
-      if (locationWatcher) {
-        locationWatcher.remove();
-      }
+      locationWatcherRef.current?.remove();
+      locationWatcherRef.current = null;
+      if (routeAlertTimerRef.current) clearTimeout(routeAlertTimerRef.current);
+      void stopNavigationBackgroundUpdates();
     };
-  }, [locationWatcher]);
+  }, []);
 
   // --- Location and Safety Data Management Functions ---
 
@@ -1011,9 +1113,8 @@ const SafeMaps = () => {
             ),
             score: card.safety,
             lighting:
-              card.explanation?.stats &&
-              typeof (card.explanation as any).stats?.lighting_pct === "number"
-                ? (card.explanation as any).stats.lighting_pct / 100
+              typeof card.explanation?.stats?.lighting_pct === "number"
+                ? card.explanation.stats.lighting_pct / 100
                 : null,
             crowd: null,
           },
@@ -1084,10 +1185,14 @@ const SafeMaps = () => {
     const processedRoutes: RouteDraft[] = allGoogleRoutes.map(
       (route, index) => {
         const leg = route.legs[0];
-        const coordinates = decodePolyline(route.overview_polyline.points);
-        const directions = leg.steps.map((step: any) =>
+        const directions: NavStep[] = leg.steps.map((step: any) =>
           mapGoogleStepToNavStep(step, decodePolyline),
         );
+        const detailed = stepsToRouteCoordinates(directions);
+        const coordinates =
+          detailed.length > 1
+            ? detailed
+            : decodePolyline(route.overview_polyline.points);
 
         return {
           id: `route-${Date.now()}-${index}`,
@@ -1282,9 +1387,7 @@ const SafeMaps = () => {
 
       setRouteOptions(routes);
 
-      let selectedRoute = routes[0];
-      const balanced = routes.find((r) => r.mode === "balanced");
-      if (balanced) selectedRoute = balanced;
+      let selectedRoute = routes.find((r) => r.mode === "safest") ?? routes[0];
 
       // If "safeRouteOnly" is enabled and the best route is dangerous, try to find an alternative.
       if (safeRouteOnly && selectedRoute.safety.overall === "dangerous") {
@@ -1490,6 +1593,363 @@ const SafeMaps = () => {
     setShowNearestPlaceModal(false); // Close the modal
   };
 
+  useEffect(() => {
+    isNavigationModeRef.current = isNavigationMode;
+  }, [isNavigationMode]);
+
+  // Shrink to a floating map (like Google Maps) when leaving the app mid-trip.
+  useEffect(() => {
+    setAutoPictureInPicture(isNavigationMode);
+    return () => setAutoPictureInPicture(false);
+  }, [isNavigationMode]);
+
+  // The PiP window shows whatever is on screen, so make sure that's the map.
+  useEffect(() => {
+    if (!isInPip || !isNavigationModeRef.current) return;
+    setShowDirectionsModal(false);
+    router.navigate("/navigate" as never);
+  }, [isInPip, router]);
+
+  const showRouteAlert = useCallback(
+    (alert: LiveNavRouteAlert | null, autoHideMs?: number) => {
+      if (routeAlertTimerRef.current) {
+        clearTimeout(routeAlertTimerRef.current);
+        routeAlertTimerRef.current = null;
+      }
+      setRouteAlert(alert);
+      if (alert && autoHideMs) {
+        routeAlertTimerRef.current = setTimeout(() => {
+          routeAlertTimerRef.current = null;
+          setRouteAlert(null);
+        }, autoHideMs);
+      }
+    },
+    [],
+  );
+  /** True while the pre-reroute / reroute-failed warning is on screen. */
+  const offRouteWarningRef = useRef(false);
+  const backgroundPermissionAskedRef = useRef(false);
+
+  /** Swap the active route in place without leaving navigation. */
+  const replaceActiveRoute = (
+    coords: Coordinate[],
+    steps: NavStep[],
+    meta: {
+      id: string;
+      distanceKm: number;
+      durationMin: number;
+      safety?: number | null;
+    },
+    position: Coordinate,
+  ) => {
+    routeCoordsRef.current = coords;
+    navStepsRef.current = steps;
+    routeMetaRef.current = {
+      durationMin: meta.durationMin,
+      distanceKm: meta.distanceKm,
+    };
+    setRouteCoordinates(coords);
+    setDirections(steps);
+    setRouteInfo((prev) =>
+      prev
+        ? {
+            ...prev,
+            id: meta.id,
+            coordinates: coords,
+            directions: steps,
+            distance: meta.distanceKm,
+            duration: meta.durationMin,
+            description: `${meta.distanceKm.toFixed(2)} km • ${meta.durationMin} min`,
+            safety:
+              typeof meta.safety === "number"
+                ? { ...prev.safety, score: meta.safety }
+                : prev.safety,
+          }
+        : prev,
+    );
+
+    const snapshot = updateLiveNavigation({
+      position,
+      heading: null,
+      route: coords,
+      steps,
+      previousStepIndex: 0,
+      previousAlongMeters: null,
+      totalDurationMin: meta.durationMin,
+      totalDistanceKm: meta.distanceKm,
+    });
+    navAlongRef.current = snapshot.alongMeters;
+    navStepIndexRef.current = snapshot.stepIndex;
+    setLiveNav(snapshot);
+  };
+
+  const fetchGoogleWalkingRoute = async (
+    origin: Coordinate,
+    destination: Coordinate,
+  ): Promise<{
+    coords: Coordinate[];
+    steps: NavStep[];
+    distanceKm: number;
+    durationMin: number;
+  } | null> => {
+    if (!GOOGLE_DIRECTIONS_API_KEY) return null;
+    const url =
+      `https://maps.googleapis.com/maps/api/directions/json` +
+      `?origin=${origin.latitude},${origin.longitude}` +
+      `&destination=${destination.latitude},${destination.longitude}` +
+      `&mode=walking&units=metric&key=${GOOGLE_DIRECTIONS_API_KEY}`;
+    const response = await fetch(url);
+    const data = await response.json();
+    if (data.status !== "OK" || !data.routes?.length) return null;
+    const route = data.routes[0];
+    const leg = route.legs[0];
+    const steps: NavStep[] = leg.steps.map((step: any) =>
+      mapGoogleStepToNavStep(step, decodePolyline),
+    );
+    const detailed = stepsToRouteCoordinates(steps);
+    return {
+      coords:
+        detailed.length > 1
+          ? detailed
+          : decodePolyline(route.overview_polyline.points),
+      steps,
+      distanceKm: leg.distance.value / 1000,
+      durationMin: Math.round(leg.duration.value / 60),
+    };
+  };
+
+  /**
+   * Recalculate from the current position: SafeRoute A* first, then Google
+   * walking directions when the position is outside the safety graph.
+   */
+  const rerouteFrom = async (position: Coordinate) => {
+    const destination = destinationRef.current;
+    if (!destination || rerouteInFlightRef.current) return;
+    rerouteInFlightRef.current = true;
+    lastRerouteAtRef.current = Date.now();
+    offRouteWarningRef.current = false;
+    showRouteAlert({
+      tone: "warning",
+      title: "You've left the safe route",
+      body: "Finding a new path from here…",
+      busy: true,
+    });
+
+    try {
+      try {
+        const result = await fetchLiveReroute({
+          position,
+          destination,
+          mode: routeModeRef.current,
+        });
+        if (!isNavigationModeRef.current) return;
+        const coords = (result.route?.polyline || []).map(([lat, lon]) => ({
+          latitude: lat,
+          longitude: lon,
+        }));
+        if (coords.length >= 2) {
+          const distanceM = result.route.distance || 0;
+          const eta = result.route.eta || 0;
+          replaceActiveRoute(
+            coords,
+            polylineToNavSteps(coords, distanceM, eta),
+            {
+              id: result.route.id || `reroute-${Date.now()}`,
+              distanceKm: distanceM / 1000,
+              durationMin: eta,
+              safety: result.route.safety,
+            },
+            position,
+          );
+          const unknownStreet =
+            (result.origin_snap_m ?? 0) > UNKNOWN_STREET_SNAP_M;
+          offSafetyGraphRef.current = unknownStreet;
+          if (unknownStreet) {
+            showRouteAlert({
+              tone: "warning",
+              title: "This street isn't in our safety data yet",
+              body: "New safe route planned from the nearest street we know. Stay alert until you rejoin it.",
+            });
+          } else {
+            showRouteAlert({ tone: "success", title: "New safe route found" }, 4000);
+          }
+          return;
+        }
+      } catch (error) {
+        console.warn("SafeRoute reroute unavailable, trying Google:", error);
+      }
+
+      const google = await fetchGoogleWalkingRoute(position, destination).catch(
+        () => null,
+      );
+      if (!isNavigationModeRef.current) return;
+      if (google && google.coords.length >= 2) {
+        replaceActiveRoute(
+          google.coords,
+          google.steps,
+          {
+            id: `google-reroute-${Date.now()}`,
+            distanceKm: google.distanceKm,
+            durationMin: google.durationMin,
+          },
+          position,
+        );
+        offSafetyGraphRef.current = true;
+        showRouteAlert({
+          tone: "warning",
+          title: "You've left the safe route",
+          body: "This street isn't in our safety data yet. Following standard walking directions — stay alert.",
+        });
+        return;
+      }
+
+      offRouteWarningRef.current = true;
+      showRouteAlert({
+        tone: "warning",
+        title: "You've left the route",
+        body: "Couldn't plan a new path. Head back to the highlighted route.",
+      });
+    } finally {
+      rerouteInFlightRef.current = false;
+      offRouteFixesRef.current = 0;
+    }
+  };
+
+  /** Runs for every GPS fix during navigation (foreground watcher or background task). */
+  const handleNavigationFix = (newLocation: Location.LocationObject) => {
+    if (!isNavigationModeRef.current || !newLocation?.coords) return;
+    // Both sources can deliver the same fix; drop duplicates and stale ones.
+    const ts = newLocation.timestamp || Date.now();
+    if (ts <= lastFixTimestampRef.current) return;
+    lastFixTimestampRef.current = ts;
+
+    const { latitude, longitude, heading, speed, accuracy } =
+      newLocation.coords;
+    const position = { latitude, longitude };
+
+    const snapshot = updateLiveNavigation({
+      position,
+      heading: typeof heading === "number" && heading >= 0 ? heading : null,
+      route: routeCoordsRef.current,
+      steps: navStepsRef.current,
+      previousStepIndex: navStepIndexRef.current,
+      previousAlongMeters: navAlongRef.current,
+      totalDurationMin: routeMetaRef.current.durationMin,
+      totalDistanceKm: routeMetaRef.current.distanceKm,
+    });
+    navStepIndexRef.current = snapshot.stepIndex;
+    // Keep progress anchored while off-route so the forward window doesn't drift.
+    if (!snapshot.offRoute) navAlongRef.current = snapshot.alongMeters;
+    setLiveNav(snapshot);
+    setLocation(newLocation);
+
+    if (
+      navShareSessionRef.current &&
+      auth.currentUser &&
+      Date.now() - navShareUploadAtRef.current >= 5_000
+    ) {
+      navShareUploadAtRef.current = Date.now();
+      void publishSafetyLocation(
+        {
+          collection: "routes",
+          sessionId: navShareSessionRef.current,
+          userId: auth.currentUser.uid,
+        },
+        newLocation,
+      ).catch(console.warn);
+    }
+
+    const accurateFix = typeof accuracy !== "number" || accuracy <= 50;
+    if (snapshot.offRoute && !snapshot.arrived && accurateFix) {
+      offRouteFixesRef.current += 1;
+      if (
+        offRouteFixesRef.current === 1 &&
+        !rerouteInFlightRef.current &&
+        !offRouteWarningRef.current
+      ) {
+        offRouteWarningRef.current = true;
+        showRouteAlert({
+          tone: "warning",
+          title: "You've left the safe route",
+          body: "Head back to the highlighted path, or keep going and we'll reroute.",
+        });
+        void Haptics.notificationAsync(
+          Haptics.NotificationFeedbackType.Warning,
+        );
+      }
+      const shouldReroute =
+        offRouteFixesRef.current >= REROUTE_AFTER_OFF_ROUTE_FIXES ||
+        snapshot.distanceFromRouteMeters > REROUTE_FORCE_DISTANCE_M;
+      if (
+        shouldReroute &&
+        !rerouteInFlightRef.current &&
+        Date.now() - lastRerouteAtRef.current >= REROUTE_COOLDOWN_MS
+      ) {
+        void rerouteFrom(position);
+      }
+    } else if (!snapshot.offRoute) {
+      offRouteFixesRef.current = 0;
+      if (offRouteWarningRef.current && !rerouteInFlightRef.current) {
+        offRouteWarningRef.current = false;
+        showRouteAlert(null);
+      }
+    }
+
+    if (mapRef.current) {
+      // Prefer GPS course when moving; otherwise route tangent.
+      const moving =
+        typeof speed === "number" && Number.isFinite(speed) && speed > 0.8;
+      const camHeading =
+        moving && typeof heading === "number" && heading >= 0
+          ? heading
+          : snapshot.bearing;
+      mapRef.current.animateCamera(
+        {
+          center: snapshot.snapped,
+          heading: camHeading,
+          pitch: 58,
+          zoom: 18,
+        },
+        { duration: 450 },
+      );
+    }
+
+    // Alerts can't be shown while backgrounded; retry on the next active fix.
+    if (
+      snapshot.arrived &&
+      !arrivedAlertedRef.current &&
+      AppState.currentState === "active"
+    ) {
+      arrivedAlertedRef.current = true;
+      Alert.alert("Arrived", "You have reached your destination.", [
+        { text: "Done", onPress: () => stopNavigationRef.current() },
+      ]);
+    }
+  };
+  const navFixHandlerRef = useRef(handleNavigationFix);
+  useLayoutEffect(() => {
+    navFixHandlerRef.current = handleNavigationFix;
+  });
+
+  useEffect(
+    () =>
+      subscribeNavigationLocations((loc) => navFixHandlerRef.current(loc)),
+    [],
+  );
+
+  // Catch up immediately when returning from the background / screen lock.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state !== "active" || !isNavigationModeRef.current) return;
+      Location.getLastKnownPositionAsync()
+        .then((loc) => {
+          if (loc) navFixHandlerRef.current(loc);
+        })
+        .catch(() => {});
+    });
+    return () => sub.remove();
+  }, []);
+
   /**
    * Initiates actual navigation mode with live turn-by-turn + camera follow.
    */
@@ -1503,13 +1963,17 @@ const SafeMaps = () => {
     }
 
     // Tear down any previous watcher before starting a new session.
-    if (locationWatcher) {
-      locationWatcher.remove();
-      setLocationWatcher(null);
-    }
+    locationWatcherRef.current?.remove();
+    locationWatcherRef.current = null;
 
     const steps = (routeInfo.directions || directions || []) as NavStep[];
     navStepIndexRef.current = 0;
+    navAlongRef.current = null;
+    lastFixTimestampRef.current = 0;
+    offRouteFixesRef.current = 0;
+    lastRerouteAtRef.current = 0;
+    offSafetyGraphRef.current = false;
+    offRouteWarningRef.current = false;
     arrivedAlertedRef.current = false;
     routeCoordsRef.current = routeCoordinates;
     navStepsRef.current = steps;
@@ -1517,6 +1981,11 @@ const SafeMaps = () => {
       durationMin: routeInfo.duration || 0,
       distanceKm: routeInfo.distance || 0,
     };
+    destinationRef.current =
+      selectedLocation?.coordinate ??
+      routeCoordinates[routeCoordinates.length - 1];
+    routeModeRef.current = routeInfo.mode ?? "safest";
+    showRouteAlert(null);
 
     const seed = updateLiveNavigation({
       position: {
@@ -1527,11 +1996,63 @@ const SafeMaps = () => {
       route: routeCoordinates,
       steps,
       previousStepIndex: 0,
+      previousAlongMeters: null,
       totalDurationMin: routeInfo.duration || 0,
       totalDistanceKm: routeInfo.distance || 0,
     });
+    navAlongRef.current = seed.alongMeters;
+    navStepIndexRef.current = seed.stepIndex;
+    isNavigationModeRef.current = true;
     setLiveNav(seed);
     setIsNavigationMode(true);
+
+    // Immediate camera into navigation perspective.
+    requestAnimationFrame(() => {
+      mapRef.current?.animateCamera(
+        {
+          center: seed.snapped,
+          heading: seed.bearing,
+          pitch: 55,
+          zoom: 17.5,
+        },
+        { duration: 700 },
+      );
+    });
+
+    try {
+      const watcher = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.BestForNavigation,
+          timeInterval: 800,
+          distanceInterval: 3,
+          mayShowUserSettingsDialog: true,
+        },
+        (newLocation) => navFixHandlerRef.current(newLocation),
+      );
+      if (isNavigationModeRef.current) {
+        locationWatcherRef.current = watcher;
+      } else {
+        watcher.remove();
+      }
+    } catch (error) {
+      console.error("Error starting location watcher:", error);
+      Alert.alert(
+        "Navigation Error",
+        "Could not start live navigation. Please check location permissions.",
+      );
+    }
+
+    // Awaited so its permission prompt can't overlap the guardian-sharing one below.
+    const askForBackground = !backgroundPermissionAskedRef.current;
+    backgroundPermissionAskedRef.current = true;
+    const backgroundStarted = await startNavigationBackgroundUpdates(
+      selectedLocation?.title,
+      { requestPermission: askForBackground },
+    );
+    if (!isNavigationModeRef.current) {
+      if (backgroundStarted) void stopNavigationBackgroundUpdates();
+      return;
+    }
 
     try {
       const raw = await AsyncStorage.getItem(GUARDIANS_STORAGE_KEY);
@@ -1575,104 +2096,23 @@ const SafeMaps = () => {
       setPrimaryGuardian(null);
       setGuardianConnected(false);
     }
-
-    // Immediate camera into navigation perspective.
-    requestAnimationFrame(() => {
-      mapRef.current?.animateCamera(
-        {
-          center: seed.snapped,
-          heading: seed.bearing,
-          pitch: 55,
-          zoom: 17.5,
-        },
-        { duration: 700 },
-      );
-    });
-
-    try {
-      const watcher = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.BestForNavigation,
-          timeInterval: 800,
-          distanceInterval: 3,
-          mayShowUserSettingsDialog: true,
-        },
-        (newLocation) => {
-          if (!newLocation.coords) return;
-          const { latitude, longitude, heading, speed } = newLocation.coords;
-          const position = { latitude, longitude };
-
-          const snapshot = updateLiveNavigation({
-            position,
-            heading:
-              typeof heading === "number" && heading >= 0 ? heading : null,
-            route: routeCoordsRef.current,
-            steps: navStepsRef.current,
-            previousStepIndex: navStepIndexRef.current,
-            totalDurationMin: routeMetaRef.current.durationMin,
-            totalDistanceKm: routeMetaRef.current.distanceKm,
-          });
-          navStepIndexRef.current = snapshot.stepIndex;
-          setLiveNav(snapshot);
-          setLocation(newLocation);
-          if (
-            navShareSessionRef.current &&
-            auth.currentUser &&
-            Date.now() - navShareUploadAtRef.current >= 5_000
-          ) {
-            navShareUploadAtRef.current = Date.now();
-            void publishSafetyLocation(
-              {
-                collection: "routes",
-                sessionId: navShareSessionRef.current,
-                userId: auth.currentUser.uid,
-              },
-              newLocation,
-            ).catch(console.warn);
-          }
-
-          if (!mapRef.current) return;
-
-          // Prefer GPS course when moving; otherwise route tangent.
-          const moving =
-            typeof speed === "number" && Number.isFinite(speed) && speed > 0.8;
-          const camHeading =
-            moving && typeof heading === "number" && heading >= 0
-              ? heading
-              : snapshot.bearing;
-
-          mapRef.current.animateCamera(
-            {
-              center: snapshot.snapped,
-              heading: camHeading,
-              pitch: 58,
-              zoom: 18,
-            },
-            { duration: 450 },
-          );
-
-          if (snapshot.arrived && !arrivedAlertedRef.current) {
-            arrivedAlertedRef.current = true;
-            Alert.alert("Arrived", "You have reached your destination.", [
-              { text: "Done", onPress: () => stopNavigation() },
-            ]);
-          }
-        },
-      );
-      setLocationWatcher(watcher);
-    } catch (error) {
-      console.error("Error starting location watcher:", error);
-      Alert.alert(
-        "Navigation Error",
-        "Could not start live navigation. Please check location permissions.",
-      );
-    }
   };
 
   /**
    * Stops the current navigation.
    */
   const stopNavigation = () => {
+    isNavigationModeRef.current = false;
+    locationWatcherRef.current?.remove();
+    locationWatcherRef.current = null;
+    void stopNavigationBackgroundUpdates();
+    navAlongRef.current = null;
+    offRouteFixesRef.current = 0;
+    offSafetyGraphRef.current = false;
+    offRouteWarningRef.current = false;
+    destinationRef.current = null;
+    showRouteAlert(null);
+
     const sharingSession = navShareSessionRef.current;
     navShareSessionRef.current = "";
     if (sharingSession) {
@@ -1697,11 +2137,6 @@ const SafeMaps = () => {
     setNearestPlaceDetails(null);
     setShowNearestPlaceModal(false);
 
-    if (locationWatcher) {
-      locationWatcher.remove();
-      setLocationWatcher(null);
-    }
-
     if (location) {
       mapRef.current?.animateCamera(
         {
@@ -1718,12 +2153,22 @@ const SafeMaps = () => {
     }
   };
 
+  useLayoutEffect(() => {
+    stopNavigationRef.current = stopNavigation;
+  });
+
   useEffect(() => {
-    if (isLocationReady && pendingNavigationRoute) {
-      const { coordinate, title, subtitle } = pendingNavigationRoute;
-      stopNavigation();
+    if (!isLocationReady || !pendingNavigationRoute) return;
+    const { coordinate, title, subtitle } = pendingNavigationRoute;
+    setPendingNavigationRoute(null);
+
+    const openDestination = () => {
+      if (isNavigationModeRef.current) stopNavigationRef.current();
       setShowBottomSheet(false);
       setShowNearestPlaceModal(false);
+      setNearbyPoliceStations([]);
+      setNearbyHospitals([]);
+      setNearestPlaceDetails(null);
       setSelectedLocation({
         id: `saved-${coordinate.latitude}-${coordinate.longitude}`,
         title: title || "Saved Place",
@@ -1737,8 +2182,22 @@ const SafeMaps = () => {
         longitudeDelta: 0.01,
       });
       calculateAndShowRoutes(coordinate, false);
-      setPendingNavigationRoute(null);
+    };
+
+    if (isNavigationModeRef.current) {
+      Alert.alert(
+        "Replace current trip?",
+        `You're navigating right now. Show routes to ${
+          title || "this place"
+        } instead?`,
+        [
+          { text: "Keep navigating", style: "cancel" },
+          { text: "Replace", style: "destructive", onPress: openDestination },
+        ],
+      );
+      return;
     }
+    openDestination();
   }, [isLocationReady, pendingNavigationRoute]);
 
   /**
@@ -1911,22 +2370,7 @@ View on Map: https://www.google.com/maps/search/?api=1&query=${loc.coordinate.la
               ? liveNav.remainingCoordinates
               : routeCoordinates
           }
-          comparisonRoutes={
-            !isNavigationMode && routeOptions.length > 0
-              ? routeOptions.slice(0, 3).map((r) => ({
-                  id: r.id,
-                  coordinates: r.coordinates,
-                  color: r.color,
-                }))
-              : null
-          }
-          selectedComparisonIndex={selectedRouteIndex}
-          traveledCoordinates={
-            isNavigationMode ? liveNav?.traveledCoordinates : undefined
-          }
-          routeKey={`${selectedRouteIndex}-${routeInfo?.id ?? "none"}-${
-            liveNav?.stepIndex ?? "x"
-          }`}
+          turnArrow={isNavigationMode ? liveNav?.turnArrow ?? null : null}
           routeColor={
             isNavigationMode
               ? themeColors.primary
@@ -1981,9 +2425,25 @@ View on Map: https://www.google.com/maps/search/?api=1&query=${loc.coordinate.la
           }
         />
 
+        {showPipLayout ? (
+          <PipNavigationCard
+            instruction={
+              liveNav?.instruction ||
+              directions[0]?.instruction ||
+              "Continue on route"
+            }
+            maneuverDistance={liveNav?.distanceToManeuverLabel}
+            maneuverIcon={(liveNav?.maneuverIcon as any) || "straight"}
+            remainingMinutes={
+              liveNav?.remainingMinutes ?? Math.round(routeInfo?.duration ?? 0)
+            }
+            alertTitle={routeAlert?.busy ? routeAlert.title : undefined}
+          />
+        ) : null}
+
         {/* Live Navigation HUD — full-screen map chrome */}
         <LiveNavigationHUD
-          visible={Boolean(isNavigationMode && routeInfo)}
+          visible={Boolean(isNavigationMode && routeInfo && !showPipLayout)}
           padForTabBar
           instruction={
             liveNav?.instruction ||
@@ -2020,6 +2480,11 @@ View on Map: https://www.google.com/maps/search/?api=1&query=${loc.coordinate.la
                 }
               : null
           }
+          routeAlert={routeAlert}
+          onDismissRouteAlert={() => {
+            offRouteWarningRef.current = false;
+            showRouteAlert(null);
+          }}
           onCallGuardian={() => {
             if (primaryGuardian?.phone) {
               void Linking.openURL(`tel:${primaryGuardian.phone}`);

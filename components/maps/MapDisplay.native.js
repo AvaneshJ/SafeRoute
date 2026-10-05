@@ -14,11 +14,34 @@ import Constants from "expo-constants";
 import MapView, {
   Circle,
   Marker,
+  Polygon,
   Polyline,
   PROVIDER_GOOGLE,
 } from "react-native-maps";
 
 const isExpoGo = Constants.appOwnership === "expo";
+
+const TURN_ARROW_OUTLINE = "rgba(15, 23, 42, 0.6)";
+
+/** Apply an alpha to #RGB / #RRGGBB / rgb() colors; other formats pass through. */
+function withAlpha(color, alpha) {
+  if (typeof color !== "string") return color;
+  const hex = color.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hex) {
+    let h = hex[1];
+    if (h.length === 3) h = h.split("").map((ch) => ch + ch).join("");
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+  const rgb = color.match(/^rgba?\(([^)]+)\)$/i);
+  if (rgb) {
+    const [r, g, b] = rgb[1].split(",").map((part) => part.trim());
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+  return color;
+}
 
 const MapDisplay = ({
   mapRef,
@@ -30,13 +53,10 @@ const MapDisplay = ({
   reviewDetailPins = [],
   reviewDraftCoordinate = null,
   routeCoordinates,
-  routeKey,
   routeColor,
   routeStrokeWidth = 6,
-  /** Optional Safest/Balanced/Fastest overlays (comparison mode). */
-  comparisonRoutes = null,
-  selectedComparisonIndex = 0,
-  traveledCoordinates,
+  /** { shaft: LatLng[], head: LatLng[] } — white on-road arrow at the next turn */
+  turnArrow,
   onLongPress,
   onRegionChangeComplete,
   onMyLocationPress,
@@ -67,13 +87,32 @@ const MapDisplay = ({
   }, [nearbyPoliceStations, nearbyHospitals, navigationMode]);
 
   const ahead =
-    Array.isArray(routeCoordinates) && routeCoordinates.length > 0
+    Array.isArray(routeCoordinates) && routeCoordinates.length > 1
       ? routeCoordinates
       : [];
-  const traveled =
-    Array.isArray(traveledCoordinates) && traveledCoordinates.length > 1
-      ? traveledCoordinates
-      : [];
+  const hasRoute = ahead.length > 0;
+  const showTurnArrow =
+    navigationMode &&
+    Array.isArray(turnArrow?.shaft) &&
+    turnArrow.shaft.length > 1 &&
+    Array.isArray(turnArrow?.head) &&
+    turnArrow.head.length === 3;
+  // Route + turn-arrow overlays stay mounted with fixed keys and are hidden via
+  // empty/transparent props: on Android New Arch (react-native-maps 1.27),
+  // unmounting a Polyline/Polygon can leave a "ghost" still painted on the map.
+  const arrowAnchor =
+    turnArrow?.head?.[0] ||
+    navigationCoordinate ||
+    ahead[0] || {
+      latitude: initialRegion?.latitude ?? 0,
+      longitude: initialRegion?.longitude ?? 0,
+    };
+  const arrowShaft = showTurnArrow ? turnArrow.shaft : [arrowAnchor, arrowAnchor];
+  const arrowHead = showTurnArrow
+    ? turnArrow.head
+    : [arrowAnchor, arrowAnchor, arrowAnchor];
+  const arrowOutline = showTurnArrow ? TURN_ARROW_OUTLINE : "transparent";
+  const arrowFill = showTurnArrow ? "#FFFFFF" : "transparent";
 
   // Prefer aggregated heat; fall back to legacy dangerous circles only if no heat.
   const useHeat = Array.isArray(safetyHeatCells) && safetyHeatCells.length > 0;
@@ -87,7 +126,7 @@ const MapDisplay = ({
         initialRegion={initialRegion}
         showsUserLocation={!navigationMode}
         showsMyLocationButton={false}
-        showsTraffic={true}
+        showsTraffic={!hasRoute}
         showsBuildings={true}
         showsIndoors={true}
         onLongPress={onLongPress}
@@ -173,58 +212,70 @@ const MapDisplay = ({
           />
         ) : null}
 
-        {traveled.length > 1 ? (
-          <Polyline
-            key={`traveled-${routeKey}`}
-            coordinates={traveled}
-            strokeColor="rgba(148, 163, 184, 0.75)"
-            strokeWidth={Math.max(4, routeStrokeWidth - 2)}
-            zIndex={1}
-            lineCap="round"
-            lineJoin="round"
-          />
-        ) : null}
+        {/* Selected route only: soft glow → white casing → colored core */}
+        <Polyline
+          key="route-glow-outer"
+          coordinates={ahead}
+          strokeColor={withAlpha(routeColor, 0.16)}
+          strokeWidth={routeStrokeWidth + 16}
+          zIndex={1}
+          lineCap="round"
+          lineJoin="round"
+        />
+        <Polyline
+          key="route-glow-inner"
+          coordinates={ahead}
+          strokeColor={withAlpha(routeColor, 0.32)}
+          strokeWidth={routeStrokeWidth + 8}
+          zIndex={2}
+          lineCap="round"
+          lineJoin="round"
+        />
+        <Polyline
+          key="route-casing"
+          coordinates={ahead}
+          strokeColor="rgba(255, 255, 255, 0.95)"
+          strokeWidth={routeStrokeWidth + 3}
+          zIndex={3}
+          lineCap="round"
+          lineJoin="round"
+        />
+        <Polyline
+          key="route-core"
+          coordinates={ahead}
+          strokeColor={routeColor}
+          strokeWidth={routeStrokeWidth}
+          zIndex={4}
+          lineCap="round"
+          lineJoin="round"
+        />
 
-        {/* Safest (green) / Balanced (blue) / Fastest (gray) — dim unselected */}
-        {!navigationMode &&
-        Array.isArray(comparisonRoutes) &&
-        comparisonRoutes.length > 0
-          ? comparisonRoutes.map((route, index) => {
-              const coords = route?.coordinates;
-              if (!Array.isArray(coords) || coords.length < 2) return null;
-              const selected = index === selectedComparisonIndex;
-              const color = route.color || routeColor;
-              return (
-                <Polyline
-                  key={`cmp-${route.id || index}-${selected ? "on" : "off"}`}
-                  coordinates={coords}
-                  strokeColor={selected ? color : `${color}55`}
-                  strokeWidth={selected ? Math.max(routeStrokeWidth, 7) : 4}
-                  zIndex={selected ? 3 : 2}
-                  lineCap="round"
-                  lineJoin="round"
-                />
-              );
-            })
-          : null}
-
-        {(navigationMode ||
-          !Array.isArray(comparisonRoutes) ||
-          comparisonRoutes.length === 0) &&
-        ahead.length > 0 ? (
-          <Polyline
-            key={
-              routeKey ||
-              `route-${ahead.length}-${routeColor}-${routeStrokeWidth}`
-            }
-            coordinates={ahead}
-            strokeColor={routeColor}
-            strokeWidth={routeStrokeWidth}
-            zIndex={2}
-            lineCap="round"
-            lineJoin="round"
-          />
-        ) : null}
+        <Polyline
+          key="turn-arrow-outline"
+          coordinates={arrowShaft}
+          strokeColor={arrowOutline}
+          strokeWidth={15}
+          zIndex={6}
+          lineCap="round"
+          lineJoin="round"
+        />
+        <Polygon
+          key="turn-arrow-head"
+          coordinates={arrowHead}
+          fillColor={arrowFill}
+          strokeColor={arrowOutline}
+          strokeWidth={2}
+          zIndex={7}
+        />
+        <Polyline
+          key="turn-arrow-shaft"
+          coordinates={arrowShaft}
+          strokeColor={arrowFill}
+          strokeWidth={10}
+          zIndex={8}
+          lineCap="round"
+          lineJoin="round"
+        />
 
         {nearbyPoliceStations.map((place) => (
           <Marker

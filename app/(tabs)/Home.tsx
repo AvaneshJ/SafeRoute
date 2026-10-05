@@ -269,7 +269,8 @@ export default function HomeDashboard() {
         icon: "local-police",
         tone: "danger",
         size: "small",
-        onPress: () => goMap({ showPoliceStations: "true" }),
+        onPress: () =>
+          goMap({ showPoliceStations: "true", nearbyNonce: String(Date.now()) }),
       },
     ],
     [router, openDestinationSearch],
@@ -284,6 +285,7 @@ export default function HomeDashboard() {
         selectedPlaceLng: String(place.coordinate.longitude),
         selectedPlaceTitle: place.title,
         selectedPlaceSubtitle: place.subtitle,
+        selectedPlaceNonce: String(Date.now()),
       } as never,
     });
   };

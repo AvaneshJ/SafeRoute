@@ -1,0 +1,65 @@
+name: Monthly lighting refresh
+
+# NOAA publishes each VIIRS monthly composite a few weeks after the month ends,
+# so check twice a month; the script exits early when nothing new is available.
+on:
+  schedule:
+    - cron: "0 3 5,20 * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Re-run even if up to date / bypass the median-shift gate"
+        type: boolean
+        default: false
+      dry_run:
+        description: "Report only, don't commit"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: monthly-lighting
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install earthengine-api rasterio pandas numpy scikit-learn requests
+
+      - name: Refresh lighting from VIIRS monthly
+        id: refresh
+        env:
+          EE_SERVICE_ACCOUNT_JSON: ${{ secrets.EE_SERVICE_ACCOUNT_JSON }}
+          EE_PROJECT: ${{ secrets.EE_PROJECT }}
+          SAFEROUTE_API_URL: ${{ secrets.SAFEROUTE_API_URL }}
+          SAFEROUTE_ADMIN_TOKEN: ${{ secrets.SAFEROUTE_ADMIN_TOKEN }}
+        run: |
+          args=""
+          if [ "${{ inputs.force }}" = "true" ]; then args="$args --force"; fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then args="$args --dry-run"; fi
+          python -m ml.refresh_monthly_lighting $args
+
+      - name: Commit updated scores
+        if: steps.refresh.outputs.changed == 'true'
+        run: |
+          git config user.name "saferoute-bot"
+          git config user.email "saferoute-bot@users.noreply.github.com"
+          git add data/processed/road_safety_scores.csv data/processed/lighting_meta.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "data: refresh road lighting from VIIRS ${{ steps.refresh.outputs.period }}"
+          git push

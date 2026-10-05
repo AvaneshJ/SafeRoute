@@ -73,6 +73,7 @@ export default ({ config }) => ({
         iosGoogleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY,
       },
     ],
+    "./plugins/withNavigationPip",
   ],
   experiments: {
     typedRoutes: true,

@@ -67,6 +67,13 @@ class EdgeAttrs:
     hospital_dist: float = 2000.0
     # Filled by Phase 4 ML apply; CSV safety preserved here
     safety_rule: float | None = None
+    # Filled by ml.predict.apply_safety_to_graph (time-of-day + community bias)
+    safety_day: float | None = None
+    safety_night: float | None = None
+    bias_day: float = 0.0
+    bias_night: float = 0.0
+    # Set per reroute from active temporary hazards; never baked into safety
+    hazard_penalty: float = 0.0
 
 
 @dataclass

@@ -14,7 +14,7 @@ import {
 } from "@/constants/theme";
 import { useAppTheme } from "@/hooks/useAppTheme";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
   Dimensions,
@@ -41,6 +41,8 @@ const ROUTES_COLLAPSED = 300;
 const EXPANDED = Math.min(560, Math.round(WINDOW_HEIGHT * 0.62));
 /** Extra gap so the floating tab bar never covers the sheet CTA. */
 const TAB_CLEARANCE = spacing.md;
+/** Breathing room between destination copy and the CTA when there are no routes. */
+const DEST_SPACER = spacing.sm;
 
 export type MapTripSheetProps = {
   visible?: boolean;
@@ -97,13 +99,41 @@ export function MapTripSheet({
     }));
   }, [selected?.reasons]);
 
-  const targetHeight = hasRoutes
-    ? EXPANDED
-    : hasDestination
-      ? DESTINATION
-      : IDLE;
-  const minHeight = hasRoutes ? ROUTES_COLLAPSED : targetHeight;
-  const maxHeight = hasRoutes ? EXPANDED : targetHeight;
+  // Measured section heights so the sheet hugs its content instead of
+  // leaving empty space under the route cards.
+  const [topH, setTopH] = useState(0);
+  const [footerH, setFooterH] = useState(0);
+  const [midH, setMidH] = useState(0);
+  const measured =
+    (setter: (v: number) => void, prev: number) => (v: number) => {
+      const next = Math.ceil(v);
+      if (Math.abs(next - prev) > 1) setter(next);
+    };
+  const hasMidContent =
+    hasRoutes &&
+    (whyReasons.length > 0 || Boolean(selected?.lowConfidenceAdvisory));
+  const fitted = topH > 0 && footerH > 0;
+  const fitCollapsed = topH + footerH;
+  const fitExpanded = Math.min(
+    EXPANDED,
+    fitCollapsed + (hasMidContent ? midH : 0),
+  );
+
+  const targetHeight = fitted
+    ? hasRoutes
+      ? Math.max(fitCollapsed, fitExpanded)
+      : fitCollapsed + DEST_SPACER
+    : hasRoutes
+      ? EXPANDED
+      : hasDestination
+        ? DESTINATION
+        : IDLE;
+  const minHeight = hasRoutes
+    ? fitted
+      ? fitCollapsed
+      : ROUTES_COLLAPSED
+    : targetHeight;
+  const maxHeight = targetHeight;
   const height = useRef(new Animated.Value(IDLE)).current;
   const heightRef = useRef(IDLE);
   const dragStart = useRef(IDLE);
@@ -113,6 +143,8 @@ export function MapTripSheet({
   targetHeightRef.current = targetHeight;
   const minHeightRef = useRef(minHeight);
   minHeightRef.current = minHeight;
+  const maxHeightRef = useRef(maxHeight);
+  maxHeightRef.current = maxHeight;
 
   useEffect(() => {
     const id = height.addListener(({ value }) => {
@@ -146,7 +178,7 @@ export function MapTripSheet({
         if (!hasRoutesRef.current) return;
         const next = dragStart.current - gesture.dy;
         height.setValue(
-          Math.min(EXPANDED, Math.max(minHeightRef.current, next)),
+          Math.min(maxHeightRef.current, Math.max(minHeightRef.current, next)),
         );
       },
       onPanResponderRelease: (_, gesture) => {
@@ -156,10 +188,11 @@ export function MapTripSheet({
         }
         const current = heightRef.current;
         const collapsed = minHeightRef.current;
-        if (gesture.vy < -0.35 || gesture.dy < -28) snapTo(EXPANDED);
+        const expanded = maxHeightRef.current;
+        if (gesture.vy < -0.35 || gesture.dy < -28) snapTo(expanded);
         else if (gesture.vy > 0.35 || gesture.dy > 28) snapTo(collapsed);
         else
-          snapTo(current > (collapsed + EXPANDED) / 2 ? EXPANDED : collapsed);
+          snapTo(current > (collapsed + expanded) / 2 ? expanded : collapsed);
       },
     }),
   ).current;
@@ -202,97 +235,105 @@ export function MapTripSheet({
       </View>
 
       <View style={[styles.clip, { backgroundColor: c.surface }]}>
-        <View {...pan.panHandlers} style={styles.handleHit}>
-          <View style={[styles.handle, { backgroundColor: c.border }]} />
-        </View>
+        <View
+          onLayout={(e) => measured(setTopH, topH)(e.nativeEvent.layout.height)}
+        >
+          <View {...pan.panHandlers} style={styles.handleHit}>
+            <View style={[styles.handle, { backgroundColor: c.border }]} />
+          </View>
 
-        {/* Header — always visible */}
-        <View style={styles.header}>
-          <View style={styles.headerTop}>
-            <Text style={[styles.kicker, { color: c.primary, flex: 1 }]}>
-              {hasDestination ? "Destination" : "Plan a trip"}
+          {/* Header — always visible */}
+          <View style={styles.header}>
+            <View style={styles.headerTop}>
+              <Text style={[styles.kicker, { color: c.primary, flex: 1 }]}>
+                {hasDestination ? "Destination" : "Plan a trip"}
+              </Text>
+              {hasDestination || hasRoutes ? (
+                <View style={styles.headerActions}>
+                  {onRefresh && hasRoutes ? (
+                    <Pressable
+                      onPress={onRefresh}
+                      disabled={refreshing}
+                      hitSlop={8}
+                      accessibilityRole="button"
+                      accessibilityLabel="Recalculate routes"
+                      style={[
+                        styles.iconBtn,
+                        {
+                          backgroundColor: c.surfaceVariant,
+                          opacity: refreshing ? 0.5 : 1,
+                        },
+                      ]}
+                    >
+                      <MaterialIcons
+                        name="refresh"
+                        size={18}
+                        color={c.textPrimary}
+                      />
+                    </Pressable>
+                  ) : null}
+                  {onDismiss ? (
+                    <Pressable
+                      onPress={onDismiss}
+                      hitSlop={8}
+                      accessibilityRole="button"
+                      accessibilityLabel="Close destination"
+                      style={[
+                        styles.iconBtn,
+                        { backgroundColor: c.surfaceVariant },
+                      ]}
+                    >
+                      <MaterialIcons
+                        name="close"
+                        size={18}
+                        color={c.textPrimary}
+                      />
+                    </Pressable>
+                  ) : null}
+                </View>
+              ) : null}
+            </View>
+            <Text
+              style={[styles.title, { color: c.textPrimary }]}
+              numberOfLines={1}
+            >
+              {destinationTitle || "Where are you headed?"}
             </Text>
-            {hasDestination || hasRoutes ? (
-              <View style={styles.headerActions}>
-                {onRefresh && hasRoutes ? (
-                  <Pressable
-                    onPress={onRefresh}
-                    disabled={refreshing}
-                    hitSlop={8}
-                    accessibilityRole="button"
-                    accessibilityLabel="Recalculate routes"
-                    style={[
-                      styles.iconBtn,
-                      {
-                        backgroundColor: c.surfaceVariant,
-                        opacity: refreshing ? 0.5 : 1,
-                      },
-                    ]}
-                  >
-                    <MaterialIcons
-                      name="refresh"
-                      size={18}
-                      color={c.textPrimary}
-                    />
-                  </Pressable>
-                ) : null}
-                {onDismiss ? (
-                  <Pressable
-                    onPress={onDismiss}
-                    hitSlop={8}
-                    accessibilityRole="button"
-                    accessibilityLabel="Close destination"
-                    style={[
-                      styles.iconBtn,
-                      { backgroundColor: c.surfaceVariant },
-                    ]}
-                  >
-                    <MaterialIcons name="close" size={18} color={c.textPrimary} />
-                  </Pressable>
-                ) : null}
+            <Text
+              style={[styles.subtitle, { color: c.textSecondary }]}
+              numberOfLines={2}
+            >
+              {destinationSubtitle ||
+                "Search above to compare lighting, crowds, and community reports."}
+            </Text>
+
+            {score != null ? (
+              <View style={styles.scoreRow}>
+                <Text style={[styles.scoreLabel, { color: c.textPrimary }]}>
+                  Safety score
+                </Text>
+                <SafetyScoreChip score={score} compact />
               </View>
             ) : null}
+
+            {hasRoutes ? (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.routes}
+              >
+                {routes.map((route, index) => (
+                  <ComparisonRouteCard
+                    key={route.id}
+                    route={route}
+                    selected={index === selectedIndex}
+                    onPress={() => onSelectRoute(index)}
+                    style={styles.routeCard}
+                  />
+                ))}
+              </ScrollView>
+            ) : null}
           </View>
-          <Text
-            style={[styles.title, { color: c.textPrimary }]}
-            numberOfLines={1}
-          >
-            {destinationTitle || "Where are you headed?"}
-          </Text>
-          <Text
-            style={[styles.subtitle, { color: c.textSecondary }]}
-            numberOfLines={2}
-          >
-            {destinationSubtitle ||
-              "Search above to compare lighting, crowds, and community reports."}
-          </Text>
-
-          {score != null ? (
-            <View style={styles.scoreRow}>
-              <Text style={[styles.scoreLabel, { color: c.textPrimary }]}>
-                Safety score
-              </Text>
-              <SafetyScoreChip score={score} compact />
-            </View>
-          ) : null}
-
-          {hasRoutes ? (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.routes}
-            >
-              {routes.map((route, index) => (
-                <ComparisonRouteCard
-                  key={route.id}
-                  route={route}
-                  selected={index === selectedIndex}
-                  onPress={() => onSelectRoute(index)}
-                  style={styles.routeCard}
-                />
-              ))}
-            </ScrollView>
-          ) : null}
         </View>
 
         {/* Why / advisory — scrolls; never covers Start Navigation */}
@@ -302,6 +343,7 @@ export function MapTripSheet({
             contentContainerStyle={styles.scrollMidContent}
             showsVerticalScrollIndicator={false}
             nestedScrollEnabled
+            onContentSizeChange={(_, h) => measured(setMidH, midH)(h)}
           >
             {whyReasons.length > 0 ? (
               <WhyThisRoute
@@ -326,9 +368,7 @@ export function MapTripSheet({
                   size={16}
                   color={c.warning}
                 />
-                <Text
-                  style={[styles.advisoryText, { color: c.textSecondary }]}
-                >
+                <Text style={[styles.advisoryText, { color: c.textSecondary }]}>
                   {selected.lowConfidenceAdvisory}
                 </Text>
               </View>
@@ -339,7 +379,12 @@ export function MapTripSheet({
         )}
 
         {/* Footer — Start Navigation / Find safe routes pinned above the tab bar */}
-        <View style={styles.footer}>
+        <View
+          style={styles.footer}
+          onLayout={(e) =>
+            measured(setFooterH, footerH)(e.nativeEvent.layout.height)
+          }
+        >
           {hasRoutes && onStartNavigation ? (
             <PrimaryButton
               label="Start Navigation"

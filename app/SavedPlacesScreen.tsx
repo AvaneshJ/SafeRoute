@@ -24,6 +24,9 @@ interface SavedLocation {
   };
 }
 
+/** Lets the Map tab tell a fresh selection apart from stale route params. */
+const newSelectionNonce = () => String(Date.now());
+
 const SavedPlacesScreen = () => {
   const { colors: c, elevation: elev } = useAppTheme();
   const [savedPlaces, setSavedPlaces] = useState<SavedLocation[]>([]);
@@ -89,6 +92,7 @@ const SavedPlacesScreen = () => {
         selectedPlaceForMap: place.coordinate,
         selectedPlaceTitle: place.title,
         selectedPlaceSubtitle: place.subtitle,
+        selectedPlaceNonce: newSelectionNonce(),
       },
     });
   };

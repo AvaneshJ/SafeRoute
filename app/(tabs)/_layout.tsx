@@ -7,6 +7,7 @@ import { radius, spacing, touch, typography } from "@/constants/theme";
 import { useAlertsBadge } from "@/hooks/useAlertsBadge";
 import { useAppTheme } from "@/hooks/useAppTheme";
 import { useAuth } from "@/hooks/useAuth";
+import { useIsInPictureInPicture } from "@/modules/navigation-pip";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import {
   DarkTheme,
@@ -73,6 +74,7 @@ export default function TabsLayout() {
   const insets = useSafeAreaInsets();
   const floatBottom = Math.max(insets.bottom, spacing.sm);
   const barHeight = touch.tabBarHeight;
+  const inPip = useIsInPictureInPicture();
 
   // Signed-out users should never stay inside the main app shell.
   if (ready && !user) {
@@ -88,7 +90,7 @@ export default function TabsLayout() {
             headerShown: false,
             tabBarActiveTintColor: c.primary,
             tabBarInactiveTintColor: c.textSecondary,
-            tabBarStyle: {
+            tabBarStyle: inPip ? { display: "none" } : {
               position: "absolute",
               left: spacing.md,
               right: spacing.md,
@@ -215,7 +217,7 @@ export default function TabsLayout() {
           <Tabs.Screen name="SOS" options={{ href: null }} />
           <Tabs.Screen name="contacts" options={{ href: null }} />
         </Tabs>
-        <ProductTourOverlay />
+        {inPip ? null : <ProductTourOverlay />}
       </View>
     </ThemeProvider>
   );

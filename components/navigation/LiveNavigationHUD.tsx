@@ -12,6 +12,7 @@ import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import * as Haptics from "expo-haptics";
 import React, { useEffect } from "react";
 import {
+  ActivityIndicator,
   Pressable,
   StyleSheet,
   Text,
@@ -47,6 +48,23 @@ export type LiveNavGuardian = {
   phone?: string;
 };
 
+export type LiveNavRouteAlert = {
+  tone: "warning" | "info" | "success";
+  title: string;
+  body?: string;
+  /** Shows a spinner instead of the icon (e.g. while rerouting). */
+  busy?: boolean;
+};
+
+const ALERT_TONES: Record<
+  LiveNavRouteAlert["tone"],
+  { color: string; icon: React.ComponentProps<typeof MaterialIcons>["name"] }
+> = {
+  warning: { color: "#FBBF24", icon: "wrong-location" },
+  info: { color: "#60A5FA", icon: "alt-route" },
+  success: { color: navDark.success, icon: "check-circle" },
+};
+
 export type LiveNavigationHUDProps = {
   visible: boolean;
   /** Current turn instruction (plain text) */
@@ -59,6 +77,9 @@ export type LiveNavigationHUDProps = {
   remainingKm: number;
   safetyScore: number;
   guardian?: LiveNavGuardian | null;
+  /** Off-route / reroute banner under the turn card */
+  routeAlert?: LiveNavRouteAlert | null;
+  onDismissRouteAlert?: () => void;
   /** When true, shows pulse + light haptic cadence (safety caution) */
   vibrationActive?: boolean;
   onCallGuardian?: () => void;
@@ -128,6 +149,8 @@ export function LiveNavigationHUD({
   remainingKm,
   safetyScore,
   guardian,
+  routeAlert = null,
+  onDismissRouteAlert,
   vibrationActive = false,
   onCallGuardian,
   onReport,
@@ -195,6 +218,48 @@ export function LiveNavigationHUD({
             <VibrationIndicator active={vibrationActive || safetyScore < 55} />
           </View>
         </View>
+
+        {routeAlert ? (
+          <Animated.View
+            key={`${routeAlert.tone}-${routeAlert.title}`}
+            entering={FadeInDown.duration(motion.fast)}
+            style={[
+              styles.alertCard,
+              { borderColor: ALERT_TONES[routeAlert.tone].color },
+            ]}
+            accessibilityRole="alert"
+            accessibilityLiveRegion="polite"
+          >
+            {routeAlert.busy ? (
+              <ActivityIndicator
+                size="small"
+                color={ALERT_TONES[routeAlert.tone].color}
+              />
+            ) : (
+              <MaterialIcons
+                name={ALERT_TONES[routeAlert.tone].icon}
+                size={22}
+                color={ALERT_TONES[routeAlert.tone].color}
+              />
+            )}
+            <View style={styles.alertCopy}>
+              <Text style={styles.alertTitle}>{routeAlert.title}</Text>
+              {routeAlert.body ? (
+                <Text style={styles.alertBody}>{routeAlert.body}</Text>
+              ) : null}
+            </View>
+            {onDismissRouteAlert && !routeAlert.busy ? (
+              <Pressable
+                onPress={onDismissRouteAlert}
+                hitSlop={10}
+                accessibilityRole="button"
+                accessibilityLabel="Dismiss route alert"
+              >
+                <MaterialIcons name="close" size={18} color={navDark.muted} />
+              </Pressable>
+            ) : null}
+          </Animated.View>
+        ) : null}
       </Animated.View>
 
       <Animated.View
@@ -377,6 +442,31 @@ const styles = StyleSheet.create({
     fontSize: typography.size.caption,
     color: navDark.muted,
     marginRight: "auto",
+  },
+  alertCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: navDark.glass,
+    borderRadius: radius.lg,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderWidth: 1,
+  },
+  alertCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  alertTitle: {
+    fontFamily: typography.fontFamily.semibold,
+    fontSize: typography.size.body,
+    color: navDark.text,
+  },
+  alertBody: {
+    fontFamily: typography.fontFamily.medium,
+    fontSize: typography.size.caption,
+    lineHeight: 16,
+    color: navDark.muted,
   },
   vibWrap: {
     flexDirection: "row",

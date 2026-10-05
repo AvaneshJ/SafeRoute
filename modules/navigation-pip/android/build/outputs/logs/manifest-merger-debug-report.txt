@@ -1,0 +1,16 @@
+-- Merging decision tree log ---
+manifest
+ADDED from C:\SafeRoutes\SafeRoute\modules\navigation-pip\android\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest491263868359865918.xml:2:13-83
+INJECTED from C:\SafeRoutes\SafeRoute\modules\navigation-pip\android\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest491263868359865918.xml:2:13-83
+	package
+		INJECTED from C:\SafeRoutes\SafeRoute\modules\navigation-pip\android\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest491263868359865918.xml
+	xmlns:android
+		ADDED from C:\SafeRoutes\SafeRoute\modules\navigation-pip\android\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest491263868359865918.xml:2:23-81
+uses-sdk
+INJECTED from C:\SafeRoutes\SafeRoute\modules\navigation-pip\android\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest491263868359865918.xml reason: use-sdk injection requested
+INJECTED from C:\SafeRoutes\SafeRoute\modules\navigation-pip\android\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest491263868359865918.xml
+INJECTED from C:\SafeRoutes\SafeRoute\modules\navigation-pip\android\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest491263868359865918.xml
+	android:targetSdkVersion
+		INJECTED from C:\SafeRoutes\SafeRoute\modules\navigation-pip\android\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest491263868359865918.xml
+	android:minSdkVersion
+		INJECTED from C:\SafeRoutes\SafeRoute\modules\navigation-pip\android\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest491263868359865918.xml
