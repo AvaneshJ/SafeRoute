@@ -1,45 +1,4 @@
 {
-  "cells": [
-    {
-      "cell": "19.12_72.85",
-      "latitude": 19.12,
-      "longitude": 72.85,
-      "communityRating": 1.61,
-      "verifiedIncidents30d": 1.91,
-      "historicalReports": 2
-    },
-    {
-      "cell": "19.09_72.84",
-      "latitude": 19.09,
-      "longitude": 72.84,
-      "communityRating": 2.0,
-      "verifiedIncidents30d": 0.8,
-      "historicalReports": 1
-    },
-    {
-      "cell": "19.06_72.83",
-      "latitude": 19.06,
-      "longitude": 72.83,
-      "communityRating": 3.0,
-      "verifiedIncidents30d": 0.0,
-      "historicalReports": 1
-    },
-    {
-      "cell": "19.11_72.87",
-      "latitude": 19.11,
-      "longitude": 72.87,
-      "communityRating": 3.0,
-      "verifiedIncidents30d": 0.0,
-      "historicalReports": 1
-    },
-    {
-      "cell": "19.02_72.85",
-      "latitude": 19.02,
-      "longitude": 72.85,
-      "communityRating": 2.0,
-      "verifiedIncidents30d": 1.01,
-      "historicalReports": 1
-    }
-  ],
-  "generated_at_ms": 1791185646411
+  "cells": [],
+  "generated_at_ms": 1791187649283
 }
