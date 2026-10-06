@@ -29,6 +29,10 @@ export type NotificationCardProps = {
   unread?: boolean;
   onPress?: () => void;
   onDismiss?: () => void;
+  /** Shows a chevron: tapping the card opens something. */
+  openable?: boolean;
+  /** Small category label above the title (e.g. in a mixed "All" feed). */
+  eyebrow?: string;
   style?: StyleProp<ViewStyle>;
   /** Stagger index for entrance fade (visual only) */
   index?: number;
@@ -81,6 +85,8 @@ export function NotificationCard({
   unread = false,
   onPress,
   onDismiss,
+  openable = false,
+  eyebrow,
   style,
   index = 0,
 }: NotificationCardProps) {
@@ -129,6 +135,11 @@ export function NotificationCard({
           <MaterialIcons name={TONE_ICON[tone]} size={20} color={accent} />
         </View>
         <View style={styles.content}>
+          {eyebrow ? (
+            <Text style={[styles.eyebrow, { color: accent }]} numberOfLines={1}>
+              {eyebrow}
+            </Text>
+          ) : null}
           <View style={styles.titleRow}>
             {unread ? <UnreadDot color={accent} /> : null}
             <Text
@@ -164,6 +175,12 @@ export function NotificationCard({
             >
               <MaterialIcons name="close" size={18} color={c.textTertiary} />
             </Pressable>
+          ) : openable ? (
+            <MaterialIcons
+              name="chevron-right"
+              size={20}
+              color={c.textTertiary}
+            />
           ) : null}
         </View>
       </Pressable>
@@ -226,6 +243,12 @@ const styles = StyleSheet.create({
     fontFamily: typography.fontFamily.medium,
     fontSize: typography.size.body,
     lineHeight: typography.lineHeight.body,
+  },
+  eyebrow: {
+    fontFamily: typography.fontFamily.semibold,
+    fontSize: 11,
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
   },
   titleUnread: {
     fontFamily: typography.fontFamily.bold,

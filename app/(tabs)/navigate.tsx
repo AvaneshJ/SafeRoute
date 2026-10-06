@@ -99,6 +99,8 @@ import {
 } from "@/services/safeRouteApi";
 import { submitCommunityReport, ratingToSeverity } from "@/services/communityIntelligence";
 import { fetchNearbyCommunityReports } from "@/services/communityReports";
+import { fetchPlacePhone, telUrl } from "@/services/nearbyPlaces";
+import { useNearestPolice } from "@/hooks/useNearestPolice";
 import {
   mapsLink,
   notifyGuardianSms,
@@ -238,6 +240,9 @@ const SafeMaps = () => {
   const [routeAlert, setRouteAlert] = useState<LiveNavRouteAlert | null>(null);
   const lastHandledDestinationKeyRef = useRef<string | null>(null);
   const lastNearbyRequestKeyRef = useRef<string | null>(null);
+  const routeRequestIdRef = useRef(0);
+  /** Start live navigation as soon as the pending route calculation lands. */
+  const autoStartNavigationRef = useRef(false);
   const lastSafetyLoadAtRef = useRef<Coordinate | null>(null);
   const stopNavigationRef = useRef<() => void>(() => {});
 
@@ -280,6 +285,15 @@ const SafeMaps = () => {
   >([]);
   const [nearbyHospitals, setNearbyHospitals] = useState<SearchResult[]>([]);
   const [isLoadingNearby, setIsLoadingNearby] = useState<boolean>(false);
+  const nearestPolice = useNearestPolice(
+    location
+      ? {
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude,
+        }
+      : null,
+    isNavigationMode,
+  );
 
   // --- State for Nearest Place Confirmation Modal ---
   const [nearestPlaceDetails, setNearestPlaceDetails] = useState<any>(null);
@@ -467,46 +481,25 @@ const SafeMaps = () => {
 
   // Effect to trigger nearby search based on navigation route parameters (from Home screen)
   useEffect(() => {
-    if (location && (showPoliceStations || showHospitals)) {
-      // Params can survive setParams(undefined) in expo-router; never re-run a
-      // request we already handled, and never tear down an active trip.
-      const requestKey = `${showPoliceStations ?? ""}|${showHospitals ?? ""}|${
-        route.params?.nearbyNonce ?? ""
-      }`;
-      const alreadyHandled = lastNearbyRequestKeyRef.current === requestKey;
-      lastNearbyRequestKeyRef.current = requestKey;
-      if (alreadyHandled || isNavigationModeRef.current) {
-        navigation.setParams({
-          showPoliceStations: undefined,
-          showHospitals: undefined,
-        });
-        return;
-      }
+    if (!location || !(showPoliceStations || showHospitals)) return;
+    // Params can survive setParams(undefined) in expo-router; never re-run a
+    // request we already handled. The current route/trip stays untouched until
+    // the user actually picks a nearby place.
+    const requestKey = `${showPoliceStations ?? ""}|${showHospitals ?? ""}|${
+      route.params?.nearbyNonce ?? ""
+    }`;
+    navigation.setParams({
+      showPoliceStations: undefined,
+      showHospitals: undefined,
+    });
+    if (lastNearbyRequestKeyRef.current === requestKey) return;
+    lastNearbyRequestKeyRef.current = requestKey;
 
-      // Clear any existing route/search results when a nearby search is triggered
-      setRouteCoordinates([]);
-      setRouteInfo(null);
-      setRouteOptions([]);
-      setSelectedLocation(null);
-      setSearchQuery("");
-      setShowSearchResults(false);
-      setShowBottomSheet(false);
-      setIsNavigationMode(false); // Ensure not in navigation mode
-
-      if (showPoliceStations) {
-        getNearbyPlaces("police");
-      }
-      if (showHospitals) {
-        getNearbyPlaces("hospital");
-      }
-
-      // IMPORTANT for tab navigation: Clear params after consumption
-      // This prevents the effect from re-running if the user navigates away
-      // and then back to the SafeMaps tab without pressing the button again.
-      navigation.setParams({
-        showPoliceStations: undefined,
-        showHospitals: undefined,
-      });
+    setShowSearchResults(false);
+    if (showPoliceStations) {
+      void getNearbyPlaces("police");
+    } else if (showHospitals) {
+      void getNearbyPlaces("hospital");
     }
   }, [
     location,
@@ -865,6 +858,7 @@ const SafeMaps = () => {
   const selectSearchResult = (result: SearchResult) => {
     setSearchQuery(result.title);
     setShowSearchResults(false);
+    clearNearbyPlaces();
     setSelectedLocation(result);
     animateBottomSheet(true);
     mapRef.current?.animateToRegion({
@@ -873,6 +867,15 @@ const SafeMaps = () => {
       latitudeDelta: 0.01,
       longitudeDelta: 0.01,
     });
+    void calculateAndShowRoutes(result.coordinate, false, result);
+  };
+
+  /** Drop police/hospital markers and the "nearest place" prompt. */
+  const clearNearbyPlaces = () => {
+    setNearbyPoliceStations([]);
+    setNearbyHospitals([]);
+    setNearestPlaceDetails(null);
+    setShowNearestPlaceModal(false);
   };
 
   /**
@@ -1341,6 +1344,7 @@ const SafeMaps = () => {
   const calculateAndShowRoutes = async (
     destinationCoord: Coordinate,
     showBottomSheetOnFinish: boolean = true,
+    destination?: SearchResult,
   ) => {
     if (!location) {
       Alert.alert("Error", "Please get your current location first.");
@@ -1351,6 +1355,11 @@ const SafeMaps = () => {
       return;
     }
 
+    // Only the latest request may write results; an older, slower one would
+    // otherwise draw the previous destination's path over the new one.
+    const requestId = ++routeRequestIdRef.current;
+    const isStale = () => requestId !== routeRequestIdRef.current;
+
     setIsCalculatingRoute(true);
     setRouteOptions([]); // Clear previous options
     setRouteCoordinates([]);
@@ -1359,13 +1368,16 @@ const SafeMaps = () => {
     setSelectedRouteIndex(0);
     setIsNavigationMode(false); // Ensure navigation mode is false when showing options
 
-    // Set selectedLocation here, just before calculation uses it (if not already set by search)
-    // This ensures selectedLocation is consistent for route calculation and bottom sheet display
-    if (!selectedLocation || selectedLocation.coordinate !== destinationCoord) {
+    if (destination) {
+      setSelectedLocation(destination);
+    } else if (
+      !selectedLocation ||
+      selectedLocation.coordinate !== destinationCoord
+    ) {
       setSelectedLocation({
         id: `temp-${destinationCoord.latitude}-${destinationCoord.longitude}`,
-        title: nearestPlaceDetails?.title || "Destination",
-        subtitle: nearestPlaceDetails?.subtitle || "",
+        title: "Destination",
+        subtitle: "",
         coordinate: destinationCoord,
       });
     }
@@ -1379,6 +1391,8 @@ const SafeMaps = () => {
       let routes =
         (await getSafeBackendRoutes(origin, destinationCoord)) ||
         (await getMultipleGoogleRoutes(origin, destinationCoord));
+
+      if (isStale()) return;
 
       if (!routes || routes.length === 0) {
         Alert.alert(
@@ -1435,16 +1449,19 @@ const SafeMaps = () => {
         });
       }
     } catch (error) {
+      if (isStale()) return;
       console.error("Route calculation error:", error);
       Alert.alert(
         "Route Error",
         "Could not calculate routes. Please check your internet connection or try again later.",
       );
     } finally {
-      setIsCalculatingRoute(false);
-      // Only show bottom sheet if explicitly requested
-      if (showBottomSheetOnFinish) {
-        animateBottomSheet(true);
+      if (!isStale()) {
+        setIsCalculatingRoute(false);
+        // Only show bottom sheet if explicitly requested
+        if (showBottomSheetOnFinish) {
+          animateBottomSheet(true);
+        }
       }
     }
   };
@@ -1563,6 +1580,11 @@ const SafeMaps = () => {
 
       setNearestPlaceDetails(nearest);
       setShowNearestPlaceModal(true);
+      void fetchPlacePhone(nearest.id).then((phone) => {
+        setNearestPlaceDetails((prev: any) =>
+          prev?.id === nearest.id ? { ...prev, phone } : prev,
+        );
+      });
 
       if (mapRef.current) {
         mapRef.current.fitToCoordinates(
@@ -1588,13 +1610,74 @@ const SafeMaps = () => {
    * Starts navigation to the nearest place found (after confirmation).
    */
   const startNavigationToNearestPlace = () => {
-    if (!nearestPlaceDetails || !location) {
+    const place = nearestPlaceDetails;
+    if (!place || !location) {
       Alert.alert("Error", "No nearest place selected for navigation.");
       return;
     }
-    calculateAndShowRoutes(nearestPlaceDetails.coordinate, false); // MODIFIED: Pass 'false' here
-    setShowNearestPlaceModal(false); // Close the modal
+    const destination: SearchResult = {
+      id: place.id,
+      title: place.title,
+      subtitle: place.subtitle,
+      coordinate: place.coordinate,
+    };
+
+    const go = () => {
+      if (isNavigationModeRef.current) stopNavigationRef.current();
+      clearNearbyPlaces();
+      setSearchQuery("");
+      setShowSearchResults(false);
+      void calculateAndShowRoutes(place.coordinate, false, destination);
+    };
+
+    setShowNearestPlaceModal(false);
+    if (isNavigationModeRef.current) {
+      Alert.alert(
+        "Replace current trip?",
+        `You're navigating right now. Show routes to ${place.title} instead?`,
+        [
+          {
+            text: "Keep navigating",
+            style: "cancel",
+            onPress: clearNearbyPlaces,
+          },
+          { text: "Replace", style: "destructive", onPress: go },
+        ],
+        { cancelable: true, onDismiss: clearNearbyPlaces },
+      );
+      return;
+    }
+    go();
   };
+
+  /** Live-nav strip: drop the current trip and navigate to the nearest station right away. */
+  const navigateToNearestPolice = () => {
+    const station = nearestPolice.station;
+    if (!station || selectedLocation?.id === station.id) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    stopNavigationRef.current();
+    setSearchQuery("");
+    setShowSearchResults(false);
+    autoStartNavigationRef.current = true;
+    void calculateAndShowRoutes(station.coordinate, false, {
+      id: station.id,
+      title: station.title,
+      subtitle: station.subtitle,
+      coordinate: station.coordinate,
+    });
+  };
+
+  const callNearestPolice = () => {
+    const phone = nearestPolice.station?.phone;
+    if (phone) void Linking.openURL(telUrl(phone));
+  };
+
+  useEffect(() => {
+    if (!autoStartNavigationRef.current || isCalculatingRoute) return;
+    autoStartNavigationRef.current = false;
+    if (routeInfo && routeCoordinates.length) void startActualNavigation();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCalculatingRoute, routeInfo, routeCoordinates]);
 
   useEffect(() => {
     isNavigationModeRef.current = isNavigationMode;
@@ -2163,6 +2246,8 @@ const SafeMaps = () => {
       void stopSafetyTracking();
     }
     navShareArrivedRef.current = false;
+    routeRequestIdRef.current++;
+    setIsCalculatingRoute(false);
     setIsNavigationMode(false);
     setLiveNav(null);
     navStepIndexRef.current = 0;
@@ -2172,10 +2257,7 @@ const SafeMaps = () => {
     setDirections([]);
     setRouteOptions([]);
     setSelectedRouteIndex(0);
-    setNearbyPoliceStations([]);
-    setNearbyHospitals([]);
-    setNearestPlaceDetails(null);
-    setShowNearestPlaceModal(false);
+    clearNearbyPlaces();
 
     if (location) {
       mapRef.current?.animateCamera(
@@ -2205,23 +2287,20 @@ const SafeMaps = () => {
     const openDestination = () => {
       if (isNavigationModeRef.current) stopNavigationRef.current();
       setShowBottomSheet(false);
-      setShowNearestPlaceModal(false);
-      setNearbyPoliceStations([]);
-      setNearbyHospitals([]);
-      setNearestPlaceDetails(null);
-      setSelectedLocation({
+      clearNearbyPlaces();
+      const destination: SearchResult = {
         id: `saved-${coordinate.latitude}-${coordinate.longitude}`,
         title: title || "Saved Place",
         subtitle: subtitle || "",
         coordinate: coordinate,
-      });
+      };
       mapRef.current?.animateToRegion({
         latitude: coordinate.latitude,
         longitude: coordinate.longitude,
         latitudeDelta: 0.01,
         longitudeDelta: 0.01,
       });
-      calculateAndShowRoutes(coordinate, false);
+      void calculateAndShowRoutes(coordinate, false, destination);
     };
 
     if (isNavigationModeRef.current) {
@@ -2485,6 +2564,17 @@ View on Map: https://www.google.com/maps/search/?api=1&query=${loc.coordinate.la
         <LiveNavigationHUD
           visible={Boolean(isNavigationMode && routeInfo && !showPipLayout)}
           padForTabBar
+          nearestPolice={
+            nearestPolice.station && nearestPolice.distanceM != null
+              ? {
+                  name: nearestPolice.station.title,
+                  distanceM: nearestPolice.distanceM,
+                  phone: nearestPolice.station.phone,
+                }
+              : null
+          }
+          onNavigateToPolice={navigateToNearestPolice}
+          onCallPolice={callNearestPolice}
           instruction={
             liveNav?.instruction ||
             directions[0]?.instruction ||
@@ -2580,6 +2670,8 @@ View on Map: https://www.google.com/maps/search/?api=1&query=${loc.coordinate.la
           }}
           refreshing={isCalculatingRoute}
           onDismiss={() => {
+            routeRequestIdRef.current++;
+            setIsCalculatingRoute(false);
             setSelectedLocation(null);
             setRouteOptions([]);
             setRouteCoordinates([]);
@@ -2588,9 +2680,7 @@ View on Map: https://www.google.com/maps/search/?api=1&query=${loc.coordinate.la
             setSelectedRouteIndex(0);
             setSearchQuery("");
             setShowSearchResults(false);
-            setNearbyPoliceStations([]);
-            setNearbyHospitals([]);
-            setNearestPlaceDetails(null);
+            clearNearbyPlaces();
           }}
           onStartNavigation={() => {
             // Stay on the map so the selected polyline + LiveNavigationHUD remain visible.
@@ -2680,12 +2770,7 @@ View on Map: https://www.google.com/maps/search/?api=1&query=${loc.coordinate.la
           isVisible={showNearestPlaceModal}
           placeDetails={nearestPlaceDetails}
           onConfirmNavigation={startNavigationToNearestPlace}
-          onCancel={() => {
-            setShowNearestPlaceModal(false);
-            setNearestPlaceDetails(null); // Clear details if user cancels
-            setNearbyPoliceStations([]); // Clear markers if user cancels
-            setNearbyHospitals([]); // Clear markers if user cancels
-          }}
+          onCancel={clearNearbyPlaces}
         />
       </SafeAreaView>
     </>

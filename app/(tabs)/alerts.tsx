@@ -12,12 +12,21 @@ import { GuardianWatchList } from "@/components/guardian/GuardianWatchList";
 import { useAlertsBadge } from "@/hooks/useAlertsBadge";
 import { useAppTheme } from "@/hooks/useAppTheme";
 import { auth, db, functions } from "@/config/firebase";
+import { notificationRoute } from "@/services/notifications";
+import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import { collection, limit, onSnapshot, orderBy, query, where } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import React, { useEffect, useMemo, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  Alert,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 type SectionId = "emergency" | "safety" | "safewalk" | "community" | "all";
@@ -30,7 +39,6 @@ type Notif = {
   timeLabel: string;
   tone: NotificationTone;
   unread: boolean;
-  ctaLabel: string;
   route?: string;
 };
 
@@ -66,15 +74,12 @@ function timeLabel(value: unknown): string {
   return `${Math.round(minutes / 1440)}d`;
 }
 
-const SECTIONS: {
-  id: Exclude<SectionId, "all">;
-  label: string;
-}[] = [
-  { id: "emergency", label: "Emergency" },
-  { id: "safety", label: "Safety alerts" },
-  { id: "safewalk", label: "Safe Walk updates" },
-  { id: "community", label: "Community updates" },
-];
+const SECTION_LABEL: Record<Exclude<SectionId, "all">, string> = {
+  emergency: "Emergency",
+  safety: "Safety",
+  safewalk: "Safe Walk",
+  community: "Community",
+};
 
 const FILTERS: { id: SectionId; label: string }[] = [
   { id: "all", label: "All" },
@@ -91,6 +96,7 @@ export default function AlertsScreen() {
   const { setUnreadCount } = useAlertsBadge();
   const [items, setItems] = useState(INITIAL);
   const [filter, setFilter] = useState<SectionId>("all");
+  const [clearing, setClearing] = useState(false);
 
   const unreadCount = items.filter((i) => i.unread).length;
 
@@ -117,6 +123,7 @@ export default function AlertsScreen() {
           snapshot.docs.map((notification) => {
             const data = notification.data();
             const type = String(data.type ?? "safety");
+            const route = notificationRoute(type, data.route, data.data?.kind);
             return {
               id: notification.id,
               section: sectionFor(type),
@@ -125,8 +132,8 @@ export default function AlertsScreen() {
               timeLabel: timeLabel(data.createdAt),
               tone: toneFor(type),
               unread: !data.readAt,
-              ctaLabel: String(data.ctaLabel ?? "Open"),
-              route: typeof data.route === "string" ? data.route : undefined,
+              // Opening this tab from itself does nothing; treat it as not openable.
+              route: route === "/(tabs)/alerts" ? undefined : route,
             };
           }),
         );
@@ -138,10 +145,51 @@ export default function AlertsScreen() {
     };
   }, []);
 
-  const visibleSections = useMemo(() => {
-    if (filter === "all") return SECTIONS;
-    return SECTIONS.filter((s) => s.id === filter);
-  }, [filter]);
+  // The query is already newest-first; filters only narrow it, never regroup it.
+  const visibleItems = useMemo(
+    () => (filter === "all" ? items : items.filter((i) => i.section === filter)),
+    [items, filter],
+  );
+
+  const unreadBySection = useMemo(() => {
+    const counts: Partial<Record<SectionId, number>> = {};
+    for (const item of items) {
+      if (item.unread) counts[item.section] = (counts[item.section] ?? 0) + 1;
+    }
+    return counts;
+  }, [items]);
+
+  const clearAll = () => {
+    if (items.length === 0) return;
+    Alert.alert(
+      "Clear all notifications?",
+      "This removes every notification from this list. It can't be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clear all",
+          style: "destructive",
+          onPress: async () => {
+            const previous = items;
+            setClearing(true);
+            setItems([]);
+            try {
+              await httpsCallable(functions, "clearNotifications")({});
+            } catch (error) {
+              console.warn(error);
+              setItems(previous);
+              Alert.alert(
+                "Couldn't clear notifications",
+                "Check your connection and try again.",
+              );
+            } finally {
+              setClearing(false);
+            }
+          },
+        },
+      ],
+    );
+  };
 
   const markAllRead = () => {
     const ids = items.filter((item) => item.unread).map((item) => item.id);
@@ -162,7 +210,9 @@ export default function AlertsScreen() {
         notificationId: item.id,
       }).catch(console.warn);
     }
-    if (item.route) router.push(item.route as never);
+    if (!item.route) return;
+    if (item.route.startsWith("/(tabs)/")) router.navigate(item.route as never);
+    else router.push(item.route as never);
   };
 
   return (
@@ -183,7 +233,7 @@ export default function AlertsScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.titleRow}>
-          <View>
+          <View style={styles.titleCopy}>
             <Text
               style={[styles.title, { color: c.textPrimary }]}
               accessibilityRole="header"
@@ -191,18 +241,51 @@ export default function AlertsScreen() {
               Notifications
             </Text>
             <Text style={[styles.subtitle, { color: c.textSecondary }]}>
-              {unreadCount} unread · sorted by urgency
+              {unreadCount > 0 ? `${unreadCount} unread · ` : ""}Newest first
             </Text>
           </View>
-          <Pressable
-            onPress={markAllRead}
-            accessibilityRole="button"
-            style={[styles.markRead, { backgroundColor: c.surfaceVariant }]}
-          >
-            <Text style={[styles.markReadText, { color: c.primary }]}>
-              Mark all read
-            </Text>
-          </Pressable>
+          {items.length > 0 ? (
+            <View style={styles.headerActions}>
+              {unreadCount > 0 ? (
+                <Pressable
+                  onPress={markAllRead}
+                  accessibilityRole="button"
+                  accessibilityLabel="Mark all read"
+                  hitSlop={6}
+                  style={[
+                    styles.headerBtn,
+                    { backgroundColor: c.surfaceVariant },
+                  ]}
+                >
+                  <MaterialIcons name="done-all" size={16} color={c.primary} />
+                  <Text style={[styles.headerBtnText, { color: c.primary }]}>
+                    Read
+                  </Text>
+                </Pressable>
+              ) : null}
+              <Pressable
+                onPress={clearAll}
+                disabled={clearing}
+                accessibilityRole="button"
+                accessibilityLabel="Clear all notifications"
+                hitSlop={6}
+                style={[
+                  styles.headerBtn,
+                  { backgroundColor: c.surfaceVariant },
+                  clearing && { opacity: 0.5 },
+                ]}
+              >
+                <MaterialIcons
+                  name="delete-sweep"
+                  size={16}
+                  color={c.errorText}
+                />
+                <Text style={[styles.headerBtnText, { color: c.errorText }]}>
+                  Clear all
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
         </View>
 
         <ScrollView
@@ -212,6 +295,7 @@ export default function AlertsScreen() {
         >
           {FILTERS.map((f) => {
             const active = filter === f.id;
+            const unread = f.id === "all" ? unreadCount : unreadBySection[f.id] ?? 0;
             return (
               <Pressable
                 key={f.id}
@@ -235,6 +319,7 @@ export default function AlertsScreen() {
                   ]}
                 >
                   {f.label}
+                  {unread > 0 ? ` · ${unread}` : ""}
                 </Text>
               </Pressable>
             );
@@ -243,81 +328,44 @@ export default function AlertsScreen() {
 
         <GuardianWatchList />
 
-        {visibleSections.map((section) => {
-          const sectionItems = items.filter((i) => i.section === section.id);
-          if (sectionItems.length === 0) return null;
-          const sectionUnread = sectionItems.filter((i) => i.unread).length;
-          return (
-            <View key={section.id} style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <Text style={[styles.sectionTitle, { color: c.textPrimary }]}>
-                  {section.label}
-                </Text>
-                {sectionUnread > 0 ? (
-                  <View
-                    style={[
-                      styles.badge,
-                      { backgroundColor: c.primaryContainer },
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.badgeText,
-                        { color: c.primaryOnContainer },
-                      ]}
-                    >
-                      {sectionUnread} new
-                    </Text>
-                  </View>
-                ) : null}
-              </View>
-              <View style={styles.list}>
-                {sectionItems.map((item) => (
-                  <View key={item.id} style={styles.cardWrap}>
-                    <NotificationCard
-                      title={item.title}
-                      body={item.body}
-                      timeLabel={item.timeLabel}
-                      tone={item.tone}
-                      unread={item.unread}
-                      index={sectionItems.indexOf(item)}
-                      onPress={() => onOpen(item)}
-                    />
-                    <Pressable
-                      onPress={() => onOpen(item)}
-                      style={[
-                        styles.cta,
-                        {
-                          borderColor: c.border,
-                          backgroundColor: c.surface,
-                        },
-                        (item.tone === "danger" || item.tone === "warning") && {
-                          backgroundColor: c.primary,
-                          borderColor: c.primary,
-                        },
-                      ]}
-                      accessibilityRole="button"
-                      accessibilityLabel={item.ctaLabel}
-                    >
-                      <Text
-                        style={[
-                          styles.ctaText,
-                          { color: c.textPrimary },
-                          (item.tone === "danger" ||
-                            item.tone === "warning") && {
-                            color: c.textOnPrimary,
-                          },
-                        ]}
-                      >
-                        {item.ctaLabel}
-                      </Text>
-                    </Pressable>
-                  </View>
-                ))}
-              </View>
+        {visibleItems.length > 0 ? (
+          <View style={styles.list}>
+            {visibleItems.map((item, index) => (
+              <NotificationCard
+                key={item.id}
+                eyebrow={filter === "all" ? SECTION_LABEL[item.section] : undefined}
+                title={item.title}
+                body={item.body}
+                timeLabel={item.timeLabel}
+                tone={item.tone}
+                unread={item.unread}
+                openable={item.route != null}
+                index={Math.min(index, 8)}
+                onPress={() => onOpen(item)}
+              />
+            ))}
+          </View>
+        ) : (
+          <View style={styles.empty}>
+            <View
+              style={[styles.emptyIcon, { backgroundColor: c.surfaceVariant }]}
+            >
+              <MaterialIcons
+                name="notifications-none"
+                size={28}
+                color={c.textTertiary}
+              />
             </View>
-          );
-        })}
+            <Text style={[styles.emptyTitle, { color: c.textPrimary }]}>
+              You&apos;re all caught up
+            </Text>
+            <Text style={[styles.emptyBody, { color: c.textSecondary }]}>
+              {filter === "all"
+                ? "New safety alerts and Safe Walk updates will show up here."
+                : `No ${SECTION_LABEL[filter].toLowerCase()} notifications right now.`}
+            </Text>
+          </View>
+        )}
       </ScrollView>
     </View>
   );
@@ -345,12 +393,23 @@ const styles = StyleSheet.create({
     fontFamily: typography.fontFamily.regular,
     fontSize: typography.size.body,
   },
-  markRead: {
+  titleCopy: {
+    flexShrink: 1,
+  },
+  headerActions: {
+    flexDirection: "row",
+    gap: spacing.xs,
+    marginTop: 4,
+  },
+  headerBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: radius.pill,
   },
-  markReadText: {
+  headerBtnText: {
     fontFamily: typography.fontFamily.medium,
     fontSize: typography.size.caption,
   },
@@ -368,45 +427,32 @@ const styles = StyleSheet.create({
     fontFamily: typography.fontFamily.medium,
     fontSize: typography.size.caption,
   },
-  section: {
-    marginBottom: spacing.lg,
-    gap: spacing.sm,
-  },
-  sectionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-  },
-  sectionTitle: {
-    fontFamily: typography.fontFamily.bold,
-    fontSize: typography.size.title,
-  },
-  badge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: radius.pill,
-  },
-  badgeText: {
-    fontFamily: typography.fontFamily.medium,
-    fontSize: 11,
-  },
   list: {
     gap: spacing.sm,
+    marginBottom: spacing.lg,
   },
-  cardWrap: {
+  empty: {
+    alignItems: "center",
     gap: spacing.sm,
+    paddingVertical: spacing.xl,
+    paddingHorizontal: spacing.lg,
   },
-  cta: {
-    alignSelf: "flex-end",
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    minHeight: 40,
+  emptyIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: "center",
     justifyContent: "center",
+    marginBottom: spacing.xs,
   },
-  ctaText: {
+  emptyTitle: {
     fontFamily: typography.fontFamily.semibold,
+    fontSize: typography.size.bodyLarge,
+  },
+  emptyBody: {
+    fontFamily: typography.fontFamily.regular,
     fontSize: typography.size.caption,
+    lineHeight: typography.lineHeight.caption,
+    textAlign: "center",
   },
 });

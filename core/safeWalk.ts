@@ -73,7 +73,7 @@ export function reduceSafeWalk(
   event: SafeWalkEvent
 ): SafeWalkSession {
   if (event.type === "USER_CANCELLED") {
-    if (session.state === "idle" || session.state === "completed" || session.state === "sos") {
+    if (session.state === "idle" || session.state === "completed") {
       return session;
     }
     return { ...session, state: "cancelled", countdownMs: null, failure: null };
@@ -190,6 +190,24 @@ export function reduceSafeWalk(
       }
       if (event.type === "LOCATION") {
         return { ...session, etaMinutes: event.etaMinutes, lastLocationAtMs: event.nowMs };
+      }
+      return session;
+
+    case "sos":
+      // Guardian was already alerted; the walker can still confirm they're fine.
+      if (event.type === "CHECKIN_CONFIRMED") {
+        return {
+          ...session,
+          state: "active",
+          stationaryMs: 0,
+          countdownMs: null,
+          lastLocationAtMs: event.nowMs,
+          activeSinceMs: event.nowMs,
+          failure: null,
+        };
+      }
+      if (event.type === "ARRIVED") {
+        return { ...session, state: "completed", etaMinutes: 0, stationaryMs: 0 };
       }
       return session;
 

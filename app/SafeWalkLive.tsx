@@ -31,8 +31,17 @@ import {
   formatDistanceKm,
   formatDurationMin,
 } from "@/core/safeWalkTrip";
+import { NearestPoliceRow } from "@/components/navigation/NearestPoliceRow";
 import { useAppTheme } from "@/hooks/useAppTheme";
-import { auth, functions } from "@/config/firebase";
+import { useNearestPolice } from "@/hooks/useNearestPolice";
+import { telUrl } from "@/services/nearbyPlaces";
+import { auth, db, functions } from "@/config/firebase";
+import {
+  clearActiveSafeWalk,
+  endSafetySession,
+  saveActiveSafeWalk,
+  setMountedSafeWalk,
+} from "@/services/activeSafeWalk";
 import {
   notifyGuardianSms,
   safeWalkArrivedMessage,
@@ -43,14 +52,16 @@ import { fetchLiveReroute } from "@/services/safeRouteApi";
 import {
   publishSafetyLocation,
   publishSafetyRoute,
-  stopSafetyTracking,
+  stopSafetyTrackingFor,
 } from "@/services/safetyTracking";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 import { LinearGradient } from "expo-linear-gradient";
+import * as Linking from "expo-linking";
 import * as Location from "expo-location";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { doc, onSnapshot } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -72,6 +83,7 @@ type Phase = "loading" | "active" | "check_in_pending" | "arrived";
 
 const { height: SCREEN_H } = Dimensions.get("window");
 const WALKER_NAME_KEY = "@SafeRoute:displayName";
+const CLOSED_SESSION_STATES = ["completed", "cancelled", "expired"];
 
 function formatElapsed(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -89,7 +101,6 @@ export default function SafeWalkLiveScreen() {
   const guardianName = params.guardianName || "Guardian";
   const guardianPhone = params.guardianPhone || "";
   const sessionId = params.sessionId || "";
-  const destTitle = params.destTitle || "Destination";
   const initialDistance = Number(params.distanceKm ?? 1.2);
   const initialEta = Number(params.etaMin ?? 14);
   const originLat = Number(params.originLat ?? 19.1136);
@@ -97,9 +108,13 @@ export default function SafeWalkLiveScreen() {
   const destLat = Number(params.destLat ?? 19.128);
   const destLng = Number(params.destLng ?? 72.845);
 
-  const dest: LatLng = useMemo(
-    () => ({ latitude: destLat, longitude: destLng }),
-    [destLat, destLng],
+  // Can switch mid-walk when the user heads to the nearest police station.
+  const [dest, setDest] = useState<LatLng>(() => ({
+    latitude: destLat,
+    longitude: destLng,
+  }));
+  const [destTitle, setDestTitle] = useState(
+    () => params.destTitle || "Destination",
   );
 
   const [phase, setPhase] = useState<Phase>("loading");
@@ -149,6 +164,13 @@ export default function SafeWalkLiveScreen() {
   const lastUploadAtRef = useRef(0);
   const walkerNameRef = useRef<string>("");
   const phaseRef = useRef<Phase>("loading");
+  /** True once the server session is closed (ended, arrived, expired elsewhere). */
+  const sessionClosedRef = useRef(false);
+  /** Lets the screen be removed without the "leave Safe Walk?" prompt. */
+  const allowLeaveRef = useRef(false);
+  const [ending, setEnding] = useState(false);
+  const [guardianAlerted, setGuardianAlerted] = useState(false);
+  const navigation = useNavigation();
 
   const pulse = useRef(new Animated.Value(1)).current;
   const modalScale = useRef(new Animated.Value(0.92)).current;
@@ -156,6 +178,53 @@ export default function SafeWalkLiveScreen() {
   const successScale = useRef(new Animated.Value(0.6)).current;
 
   phaseRef.current = phase;
+
+  const walkInProgress = phase === "active" || phase === "check_in_pending";
+  const nearestPolice = useNearestPolice(
+    walkInProgress ? userCoord : null,
+    walkInProgress,
+  );
+  const headedToNearestPolice =
+    nearestPolice.station != null &&
+    nearestPolice.station.coordinate.latitude === dest.latitude &&
+    nearestPolice.station.coordinate.longitude === dest.longitude;
+
+  /** Re-route the walk to the nearest police station, keeping the session live. */
+  const walkToNearestPolice = async () => {
+    const station = nearestPolice.station;
+    if (!station || headedToNearestPolice || rerouteBusy.current) return;
+    rerouteBusy.current = true;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    try {
+      const from = lastPosRef.current ?? userCoord;
+      const walking = await fetchWalkingRoute(from, station.coordinate);
+      routeRef.current = walking.coordinates;
+      stepsRef.current = walking.steps;
+      stepIndexRef.current = 0;
+      totalDurationRef.current = walking.durationMin;
+      totalDistanceRef.current = walking.distanceKm;
+      extendedRef.current = false;
+      lastRerouteOfferAt.current = Date.now();
+      setExtended(false);
+      setDest(station.coordinate);
+      setDestTitle(station.title);
+      setRouteSafety(null);
+      setRouteCoords(walking.coordinates);
+      setRemainingPath(walking.coordinates);
+      setTraveledPath([]);
+      setDistanceLeft(walking.distanceKm);
+      setEtaMin(walking.durationMin);
+      setProgress(0);
+      if (sessionId && auth.currentUser) {
+        void publishSafetyRoute(
+          { collection: "routes", sessionId, userId: auth.currentUser.uid },
+          walking.coordinates,
+        ).catch(console.warn);
+      }
+    } finally {
+      rerouteBusy.current = false;
+    }
+  };
 
   const applySession = (next: SafeWalkSession) => {
     sessionRef.current = next;
@@ -191,7 +260,8 @@ export default function SafeWalkLiveScreen() {
         >(functions, "publishSafetyEvent")({
           sessionId,
           type: "checkin_failed",
-          eventId: `${sessionId}-checkin-failed`,
+          // Unique per miss: a fixed id would be deduped and a second miss never alerts.
+          eventId: `${sessionId}-checkin-failed-${Date.now()}`,
           location: pos,
         });
         smsRequired =
@@ -213,8 +283,9 @@ export default function SafeWalkLiveScreen() {
         }),
       );
     }
-    await stopSafetyTracking();
-    router.push("/(tabs)/SOS" as never);
+    // Keep sharing location and stay on this screen: the guardian needs the live
+    // position most right now, and the walker can still confirm they're safe.
+    setGuardianAlerted(true);
   };
 
   const onArrived = async () => {
@@ -257,7 +328,69 @@ export default function SafeWalkLiveScreen() {
         safeWalkArrivedMessage({ walkerName: walkerNameRef.current }),
       );
     }
-    await stopSafetyTracking();
+    sessionClosedRef.current = true;
+    await stopSafetyTrackingFor("routes", sessionId);
+    await clearActiveSafeWalk(sessionId);
+  };
+
+  const stopLocalTracking = () => {
+    watchRef.current?.remove();
+    watchRef.current = null;
+    if (elapsedTimer.current) clearInterval(elapsedTimer.current);
+    if (stillnessTimer.current) clearInterval(stillnessTimer.current);
+    if (countdownTimer.current) clearInterval(countdownTimer.current);
+  };
+
+  /** Leave to the Safe Walk tab without stacking another tabs instance. */
+  const leaveScreen = () => {
+    allowLeaveRef.current = true;
+    router.dismissTo("/(tabs)/safewalk" as never);
+  };
+
+  const finishEnd = async (localOnly: boolean) => {
+    setEnding(true);
+    const result = localOnly
+      ? ({ ok: true, alreadyClosed: false } as const)
+      : sessionId
+        ? await endSafetySession(sessionId)
+        : ({ ok: true, alreadyClosed: false } as const);
+    setEnding(false);
+
+    if (!result.ok) {
+      Alert.alert(
+        "Couldn't end Safe Walk",
+        `${result.error}\n\nYour guardian may still see this walk as active. Check your connection and try again.`,
+        [
+          { text: "Keep walking", style: "cancel" },
+          { text: "Try again", onPress: () => void finishEnd(false) },
+          {
+            text: "Stop on this phone",
+            style: "destructive",
+            onPress: () => void finishEnd(true),
+          },
+        ],
+      );
+      return;
+    }
+
+    sessionClosedRef.current = true;
+    applySession(
+      reduceSafeWalk(sessionRef.current, { type: "USER_CANCELLED" }),
+    );
+    stopLocalTracking();
+    if (localOnly) {
+      await stopSafetyTrackingFor("routes", sessionId).catch(console.warn);
+      await clearActiveSafeWalk(sessionId).catch(console.warn);
+    }
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    Alert.alert(
+      "Safe Walk ended",
+      localOnly
+        ? "Location sharing stopped on this phone. It will close for your guardian automatically within a couple of hours."
+        : `${guardianName} has been told you stopped sharing your location.`,
+      [{ text: "OK", onPress: leaveScreen }],
+      { cancelable: false },
+    );
   };
 
   useEffect(() => {
@@ -426,6 +559,7 @@ export default function SafeWalkLiveScreen() {
           if (
             sessionId &&
             auth.currentUser &&
+            !sessionClosedRef.current &&
             Date.now() - lastUploadAtRef.current >= 5_000
           ) {
             lastUploadAtRef.current = Date.now();
@@ -487,14 +621,88 @@ export default function SafeWalkLiveScreen() {
 
     return () => {
       cancelled = true;
-      watchRef.current?.remove();
-      watchRef.current = null;
-      if (elapsedTimer.current) clearInterval(elapsedTimer.current);
-      if (stillnessTimer.current) clearInterval(stillnessTimer.current);
-      if (countdownTimer.current) clearInterval(countdownTimer.current);
+      stopLocalTracking();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Remember the open walk so the Safe Walk tab can offer Resume / End even if
+  // this screen gets buried or the app restarts.
+  useEffect(() => {
+    if (!sessionId) return;
+    setMountedSafeWalk(sessionId);
+    void saveActiveSafeWalk({ sessionId, params: { ...params } }).catch(
+      console.warn,
+    );
+    return () => setMountedSafeWalk(null, sessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
+
+  // The walk can be closed from somewhere else (Safe Walk tab, expiry job,
+  // another device). Stop this screen instead of silently sharing on.
+  useEffect(() => {
+    if (!sessionId) return;
+    return onSnapshot(
+      doc(db, "routes", sessionId),
+      (snap) => {
+        const state = snap.data()?.state;
+        if (!snap.exists() || CLOSED_SESSION_STATES.includes(state)) {
+          if (sessionClosedRef.current) return;
+          sessionClosedRef.current = true;
+          stopLocalTracking();
+          void stopSafetyTrackingFor("routes", sessionId).catch(console.warn);
+          void clearActiveSafeWalk(sessionId).catch(console.warn);
+          if (phaseRef.current === "arrived") return;
+          if (navigation.isFocused()) {
+            Alert.alert(
+              "Safe Walk ended",
+              state === "expired"
+                ? "This walk closed automatically after a long period without updates."
+                : "This walk was ended.",
+              [{ text: "OK", onPress: leaveScreen }],
+              { cancelable: false },
+            );
+          } else {
+            allowLeaveRef.current = true;
+            navigation.goBack();
+          }
+        } else if (state === "active" && sessionRef.current.state === "sos") {
+          setGuardianAlerted(false);
+        }
+      },
+      (err) => console.warn("SafeWalkLive session listener", err),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
+
+  // Hardware back / swipe: never drop an open walk silently.
+  useEffect(() => {
+    return navigation.addListener("beforeRemove", (e) => {
+      if (allowLeaveRef.current || sessionClosedRef.current) return;
+      if (phaseRef.current === "arrived") return;
+      e.preventDefault();
+      Alert.alert(
+        "Safe Walk is still on",
+        `${guardianName} can still see your live location. End the walk, or keep it running in the background?`,
+        [
+          { text: "Stay", style: "cancel" },
+          {
+            text: "Keep running",
+            onPress: () => {
+              allowLeaveRef.current = true;
+              navigation.dispatch(e.data.action);
+            },
+          },
+          {
+            text: "End walk",
+            style: "destructive",
+            onPress: () => void finishEnd(false),
+          },
+        ],
+      );
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigation, guardianName]);
 
   // Phase 6 — poll for safer remaining path when hazards appear ahead
   useEffect(() => {
@@ -661,30 +869,40 @@ export default function SafeWalkLiveScreen() {
     setPhase("active");
     setCountdownSec(CHECKIN_COUNTDOWN_MS / 1000);
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    const wasAlerted = checkinAlerted.current;
+    checkinAlerted.current = false;
+    setGuardianAlerted(false);
     if (sessionId) {
       void httpsCallable(functions, "publishSafetyEvent")({
         sessionId,
         type: "checkin_ok",
         eventId: `${sessionId}-checkin-${Date.now()}`,
-      }).catch(console.warn);
+      }).catch((err) => {
+        console.warn(err);
+        if (wasAlerted) {
+          Alert.alert(
+            "Couldn't reach your guardian",
+            `${guardianName} was alerted that you missed a check-in. Call or message them to let them know you're safe.`,
+          );
+        }
+      });
     }
   };
 
-  const endWalk = async () => {
-    applySession(
-      reduceSafeWalk(sessionRef.current, { type: "USER_CANCELLED" }),
+  const endWalk = () => {
+    if (ending) return;
+    Alert.alert(
+      "End Safe Walk?",
+      `${guardianName} will stop seeing your live location.`,
+      [
+        { text: "Keep walking", style: "cancel" },
+        {
+          text: "End walk",
+          style: "destructive",
+          onPress: () => void finishEnd(false),
+        },
+      ],
     );
-    watchRef.current?.remove();
-    if (stillnessTimer.current) clearInterval(stillnessTimer.current);
-    if (sessionId) {
-      await httpsCallable(functions, "publishSafetyEvent")({
-        sessionId,
-        type: "ended",
-        eventId: `${sessionId}-ended`,
-      }).catch(console.warn);
-    }
-    await stopSafetyTracking();
-    router.back();
   };
 
   const arrivalTime = useMemo(() => {
@@ -779,7 +997,7 @@ export default function SafeWalkLiveScreen() {
 
         <PrimaryButton
           label="Done"
-          onPress={() => router.replace("/(tabs)/safewalk" as never)}
+          onPress={leaveScreen}
         />
       </View>
     );
@@ -900,6 +1118,20 @@ export default function SafeWalkLiveScreen() {
             Walking to {destTitle}
           </Text>
         </View>
+        {nearestPolice.station && nearestPolice.distanceM != null ? (
+          <NearestPoliceRow
+            tone="surface"
+            name={nearestPolice.station.title}
+            distanceM={nearestPolice.distanceM}
+            phone={nearestPolice.station.phone}
+            onNavigate={() => void walkToNearestPolice()}
+            onCall={() => {
+              const phone = nearestPolice.station?.phone;
+              if (phone) void Linking.openURL(telUrl(phone));
+            }}
+            style={styles.policeStrip}
+          />
+        ) : null}
       </View>
 
       <ScrollView
@@ -948,7 +1180,11 @@ export default function SafeWalkLiveScreen() {
       </ScrollView>
 
       <View style={styles.actions}>
-        <PrimaryButton label="End Safe Walk" onPress={() => void endWalk()} />
+        <PrimaryButton
+          label="End Safe Walk"
+          onPress={endWalk}
+          loading={ending}
+        />
         <SecondaryButton label="Extend Trip" onPress={extendTrip} />
       </View>
 
@@ -995,34 +1231,40 @@ export default function SafeWalkLiveScreen() {
               <MaterialIcons name="shield" size={36} color={c.primary} />
             </View>
             <Text style={[styles.modalTitle, { color: c.textPrimary }]}>
-              Are you safe?
+              {guardianAlerted ? `${guardianName} was alerted` : "Are you safe?"}
             </Text>
             <Text style={[styles.modalBody, { color: c.textSecondary }]}>
-              We noticed you haven’t moved for a bit. Confirm you’re okay — or
-              we’ll alert {guardianName}.
+              {guardianAlerted
+                ? `You missed the check-in, so we told ${guardianName} and kept sharing your live location. Tap “I’m Safe” to let them know you're okay.`
+                : `We noticed you haven’t moved for a bit. Confirm you’re okay — or we’ll alert ${guardianName}.`}
             </Text>
 
-            <View
-              style={[
-                styles.countdownRing,
-                {
-                  borderColor: c.warning,
-                  backgroundColor: c.warningContainer,
-                },
-              ]}
-            >
-              <Text style={[styles.countdownNum, { color: c.textPrimary }]}>
-                {countdownSec}
-              </Text>
-              <Text style={[styles.countdownUnit, { color: c.textSecondary }]}>
-                sec
-              </Text>
-            </View>
+            {!guardianAlerted && (
+              <View
+                style={[
+                  styles.countdownRing,
+                  {
+                    borderColor: c.warning,
+                    backgroundColor: c.warningContainer,
+                  },
+                ]}
+              >
+                <Text style={[styles.countdownNum, { color: c.textPrimary }]}>
+                  {countdownSec}
+                </Text>
+                <Text
+                  style={[styles.countdownUnit, { color: c.textSecondary }]}
+                >
+                  sec
+                </Text>
+              </View>
+            )}
 
             <PrimaryButton label="I’m Safe" onPress={confirmSafe} />
             <Pressable
               onPress={() => {
                 void triggerSosFromCheckin();
+                router.push("/(tabs)/SOS" as never);
               }}
               style={[
                 styles.sosSecondary,
@@ -1036,7 +1278,7 @@ export default function SafeWalkLiveScreen() {
             >
               <MaterialIcons name="emergency" size={18} color={c.danger} />
               <Text style={[styles.sosSecondaryText, { color: c.danger }]}>
-                Send SOS now
+                {guardianAlerted ? "Open SOS" : "Send SOS now"}
               </Text>
             </Pressable>
           </Animated.View>
@@ -1177,6 +1419,12 @@ const styles = StyleSheet.create({
   mapBadgeText: {
     fontFamily: typography.fontFamily.medium,
     fontSize: typography.size.caption,
+  },
+  policeStrip: {
+    position: "absolute",
+    left: spacing.sm,
+    right: spacing.sm,
+    bottom: spacing.sm,
   },
   youMarker: {
     width: 28,

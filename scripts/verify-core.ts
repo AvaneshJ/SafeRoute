@@ -127,6 +127,12 @@ for (let t = 25_000; t <= 85_000; t += 5_000) {
 assert.equal(walk.state, "check_in_pending");
 walk = reduceSafeWalk(walk, { type: "COUNTDOWN_ELAPSED" });
 assert.equal(walk.state, "sos");
+// Walker confirms they're fine after the guardian was alerted
+assert.equal(
+  reduceSafeWalk(walk, { type: "CHECKIN_CONFIRMED", nowMs: 90_000 }).state,
+  "active",
+);
+assert.equal(reduceSafeWalk(walk, { type: "USER_CANCELLED" }).state, "cancelled");
 
 // Wall-clock path
 let walk2 = initialSafeWalk();

@@ -15,13 +15,41 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const PUSH_TOKEN_KEY = "@SafeRoute:expoPushToken";
 
+/**
+ * Types that still pop up while the app is open. Everything else arrives
+ * quietly in the Alerts tab (with the badge) so routine updates don't nag.
+ * When the app is closed or backgrounded, Android shows every push normally.
+ */
+const FOREGROUND_ALERT_TYPES = new Set([
+  "guardian_invite",
+  "guardian_accepted",
+  "guardian_alert",
+  "safe_walk_started",
+  "live_share_started",
+  "safety_checkin_failed",
+  "safety_checkin_ok",
+  "safety_arrived",
+  "sos_activated",
+  "sos_nearby",
+]);
+
+export function shouldAlertInForeground(type: unknown): boolean {
+  // Pushes from an older server don't carry a type; err on the side of showing.
+  return typeof type !== "string" || FOREGROUND_ALERT_TYPES.has(type);
+}
+
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-  }),
+  handleNotification: async (notification) => {
+    const show = shouldAlertInForeground(
+      notification.request.content.data?.type,
+    );
+    return {
+      shouldShowBanner: show,
+      shouldShowList: show,
+      shouldPlaySound: show,
+      shouldSetBadge: true,
+    };
+  },
 });
 
 function projectId(): string | undefined {
@@ -155,9 +183,32 @@ export async function unregisterCurrentPushToken(): Promise<void> {
   if (token) await unregisterPushToken(token);
 }
 
+/**
+ * Where tapping a notification should go. Older acknowledgement notifications
+ * pointed at the Alerts tab itself, which made "Open" a no-op there.
+ */
+export function notificationRoute(
+  type: unknown,
+  route: unknown,
+  kind: unknown,
+): string | undefined {
+  if (
+    typeof route === "string" &&
+    route.startsWith("/") &&
+    route !== "/(tabs)/alerts"
+  ) {
+    return route;
+  }
+  if (type === "safety_guardian_acknowledged") {
+    return kind === "live_share" ? "/(tabs)/navigate" : "/(tabs)/safewalk";
+  }
+  if (type === "sos_guardian_acknowledged") return "/(tabs)/SOS";
+  return typeof route === "string" && route.startsWith("/") ? route : undefined;
+}
+
 export function routeFromNotification(
   response: Notifications.NotificationResponse | null,
 ): string | null {
-  const route = response?.notification.request.content.data?.route;
-  return typeof route === "string" && route.startsWith("/") ? route : null;
+  const data = response?.notification.request.content.data;
+  return notificationRoute(data?.type, data?.route, data?.kind) ?? null;
 }

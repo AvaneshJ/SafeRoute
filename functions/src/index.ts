@@ -479,6 +479,13 @@ function sessionCopy(
         title: "Safety check-in missed",
         body: `${walkerName} didn't respond to a safety check-in. Open to see their last location.`,
       };
+    case "checkin_ok":
+      return {
+        title: `${walkerName} says they're safe`,
+        body: walk
+          ? `${walkerName} confirmed they're okay after the missed check-in. Their Safe Walk continues.`
+          : `${walkerName} confirmed they're okay after the missed check-in.`,
+      };
     case "ended":
       return {
         title: walk ? `${walkerName} ended their Safe Walk` : `${walkerName} ended their trip`,
@@ -697,6 +704,7 @@ async function createAndDispatchNotification(
   const tokens = [...new Set(allTokens.filter(isExpoToken))].slice(0, 100);
   const result = await sendExpo(tokens, input.title, input.body, {
     ...input.data,
+    type: input.type,
     route: input.route,
     notificationId: id,
   });
@@ -1097,6 +1105,11 @@ async function createSafetySession(
     });
     return true;
   });
+  if (created) {
+    await closeSupersededSessions(ownerId, kind, sessionId).catch((error) =>
+      console.warn("Closing superseded sessions failed", error)
+    );
+  }
   const copy = sessionCopy(kind, "started", walkerName, destinationLabel);
   const deliveries = created
     ? await notifyParticipants({
@@ -1188,6 +1201,7 @@ async function publishSafetyEventInternal(
   let walkerName = "Someone you trust";
   let destinationLabel: string | null = null;
   let state: SafetySessionState = "active";
+  let previousState = "active";
   const duplicate = await db.runTransaction(async (transaction) => {
     const snap = await transaction.get(ref);
     if (!snap.exists) throw new HttpsError("not-found", "Safety session not found.");
@@ -1206,6 +1220,7 @@ async function publishSafetyEventInternal(
     const eventRef = ref.collection("events").doc(id);
     const existing = await transaction.get(eventRef);
     const currentState = String(snap.get("state") ?? "active");
+    previousState = currentState;
     if (
       !existing.exists &&
       ["completed", "cancelled", "expired"].includes(currentState)
@@ -1253,8 +1268,11 @@ async function publishSafetyEventInternal(
     );
     return false;
   });
+  // checkin_ok is routine, except as the all-clear after guardians were alerted.
+  const allClear = type === "checkin_ok" && previousState === "sos";
   const shouldNotify =
-    !duplicate && !["location", "checkin_ok", "checkin_requested"].includes(type);
+    !duplicate &&
+    (allClear || !["location", "checkin_ok", "checkin_requested"].includes(type));
   let recipients = participantIds.filter((id) => id !== uid);
   if (type === "guardian_acknowledged") {
     recipients = recipients.filter((id) => id === ownerId);
@@ -1269,9 +1287,12 @@ async function publishSafetyEventInternal(
         type: `safety_${type}`,
         title: copy.title,
         body: copy.body,
+        // The owner can't open their own LiveWalkViewer; send them to their live session.
         route:
           type === "guardian_acknowledged"
-            ? "/(tabs)/alerts"
+            ? kind === "safe_walk"
+              ? "/(tabs)/safewalk"
+              : "/(tabs)/navigate"
             : `/LiveWalkViewer?sessionId=${sessionId}&collection=routes`,
         data: { sessionId, eventType: type, kind },
         includeOwner: true,
@@ -1285,6 +1306,36 @@ async function publishSafetyEventInternal(
     deliveries,
     sms_required: deliveries.some((item) => item.sms_required),
   };
+}
+
+/**
+ * A walker has one live session per kind. Starting a new one closes any older
+ * open session (e.g. a walk whose screen was lost) so guardians aren't left
+ * watching a stale walk.
+ */
+async function closeSupersededSessions(
+  ownerId: string,
+  kind: SafetySessionKind,
+  keepSessionId: string
+) {
+  const open = await db
+    .collection("routes")
+    .where("userId", "==", ownerId)
+    .where("state", "in", OPEN_ROUTE_STATES)
+    .get();
+  const stale = open.docs.filter(
+    (doc) => doc.id !== keepSessionId && String(doc.get("kind") ?? "safe_walk") === kind
+  );
+  await Promise.all(
+    stale.map((doc) =>
+      publishSafetyEventInternal(ownerId, {
+        sessionId: doc.id,
+        type: "ended",
+        eventId: `${doc.id}-superseded`,
+        data: { reason: "superseded", supersededBy: keepSessionId },
+      }).catch((error) => console.warn(`Could not close ${doc.id}`, error))
+    )
+  );
 }
 
 export const publishSafetyEvent = onCall(async (request) => {
@@ -1704,7 +1755,7 @@ export const publishEmergencyEvent = onCall(async (request) => {
         body: copy.body,
         route:
           type === "guardian_acknowledged"
-            ? "/(tabs)/alerts"
+            ? "/(tabs)/SOS"
             : `/LiveWalkViewer?sessionId=${emergencyId}&collection=emergencies`,
         data: { emergencyId, eventType: type },
         includeOwner: uid !== ownerId,
@@ -1738,6 +1789,26 @@ export const markNotificationRead = onCall(async (request) => {
     if (!snap.get("readAt")) transaction.update(ref, { readAt });
   });
   return { notificationId, readAtMs: readAt.toMillis() };
+});
+
+/** Deletes all of the caller's notifications (the Alerts tab "Clear all"). */
+export const clearNotifications = onCall(async (request) => {
+  const uid = requireAuth(request.auth?.uid);
+  let deleted = 0;
+  for (;;) {
+    const page = await db
+      .collection("notifications")
+      .where("userId", "==", uid)
+      .limit(400)
+      .get();
+    if (page.empty) break;
+    const batch = db.batch();
+    page.docs.forEach((doc) => batch.delete(doc.ref));
+    await batch.commit();
+    deleted += page.size;
+    if (page.size < 400) break;
+  }
+  return { deleted };
 });
 
 /** Compatibility helper retained for existing server imports. */

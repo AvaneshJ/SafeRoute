@@ -33,6 +33,15 @@ import {
   walkingEtaMinutes,
 } from "@/core/safeWalkTrip";
 import { useAppTheme } from "@/hooks/useAppTheme";
+import {
+  useMyOpenSafeWalks,
+  type MyOpenSafeWalk,
+} from "@/hooks/useMyOpenSafeWalk";
+import {
+  endSafetySession,
+  isSafeWalkScreenMounted,
+  loadActiveSafeWalk,
+} from "@/services/activeSafeWalk";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Image } from "expo-image";
@@ -72,6 +81,88 @@ export default function SafeWalkScreen() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [tripDraft, setTripDraft] = useState<TripDraft | null>(null);
   const [resolving, setResolving] = useState(false);
+  const { walks: openWalks } = useMyOpenSafeWalks();
+  const [endingWalkId, setEndingWalkId] = useState<string | null>(null);
+
+  const resumeWalk = async (walk: MyOpenSafeWalk) => {
+    const stored = await loadActiveSafeWalk();
+    const params =
+      stored?.sessionId === walk.id
+        ? stored.params
+        : {
+            sessionId: walk.id,
+            destTitle: walk.destinationLabel ?? "Destination",
+            ...(walk.destination
+              ? {
+                  destLat: String(walk.destination.latitude),
+                  destLng: String(walk.destination.longitude),
+                }
+              : {}),
+            ...(walk.startLocation
+              ? {
+                  originLat: String(walk.startLocation.latitude),
+                  originLng: String(walk.startLocation.longitude),
+                }
+              : {}),
+            ...(walk.etaMinutes != null ? { etaMin: String(walk.etaMinutes) } : {}),
+          };
+    const href = { pathname: "/SafeWalkLive", params } as never;
+    // Go back to the live screen if it's still in the stack instead of opening a second copy.
+    if (isSafeWalkScreenMounted(walk.id)) router.dismissTo(href);
+    else router.push(href);
+  };
+
+  const endOpenWalk = (walk: MyOpenSafeWalk) => {
+    Alert.alert(
+      "End this Safe Walk?",
+      "Your guardians will be told you stopped sharing your location.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "End walk",
+          style: "destructive",
+          onPress: async () => {
+            setEndingWalkId(walk.id);
+            const result = await endSafetySession(walk.id);
+            setEndingWalkId(null);
+            if (result.ok) {
+              Alert.alert(
+                "Safe Walk ended",
+                result.alreadyClosed
+                  ? "This walk had already ended."
+                  : "Your guardians have been notified.",
+              );
+            } else {
+              Alert.alert(
+                "Couldn't end Safe Walk",
+                `${result.error}\n\nCheck your connection and try again.`,
+                [
+                  { text: "Cancel", style: "cancel" },
+                  { text: "Try again", onPress: () => endOpenWalk(walk) },
+                ],
+              );
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  /** One walk at a time: returns false (and explains) if one is already open. */
+  const ensureNoOpenWalk = (): boolean => {
+    const open = openWalks[0];
+    if (!open) return true;
+    Alert.alert(
+      "Safe Walk already running",
+      "Resume it or end it before starting a new one.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "End it", style: "destructive", onPress: () => endOpenWalk(open) },
+        { text: "Resume", onPress: () => void resumeWalk(open) },
+      ],
+    );
+    return false;
+  };
 
   const heroOpacity = useRef(new Animated.Value(0)).current;
   const heroY = useRef(new Animated.Value(16)).current;
@@ -150,6 +241,7 @@ export default function SafeWalkScreen() {
   };
 
   const openTripPreview = async (place: DestinationPlace) => {
+    if (!ensureNoOpenWalk()) return;
     setResolving(true);
     const origin = await resolveOrigin();
     setResolving(false);
@@ -310,10 +402,72 @@ export default function SafeWalkScreen() {
           </LinearGradient>
         </Animated.View>
 
+        {openWalks.map((walk) => (
+          <View
+            key={walk.id}
+            style={[
+              styles.card,
+              styles.liveCard,
+              {
+                backgroundColor: c.surface,
+                borderColor: walk.state === "active" ? c.primary : c.danger,
+                ...elev.card,
+              },
+            ]}
+          >
+            <View style={styles.liveHeader}>
+              <View
+                style={[
+                  styles.liveDot,
+                  {
+                    backgroundColor:
+                      walk.state === "active" ? c.success : c.danger,
+                  },
+                ]}
+              />
+              <Text style={[styles.liveTitle, { color: c.textPrimary }]}>
+                {walk.state === "sos"
+                  ? "Safe Walk · guardian alerted"
+                  : walk.state === "check_in_pending"
+                    ? "Safe Walk · check-in pending"
+                    : "Safe Walk in progress"}
+              </Text>
+            </View>
+            <Text
+              style={[styles.liveSub, { color: c.textSecondary }]}
+              numberOfLines={1}
+            >
+              {walk.destinationLabel
+                ? `To ${walk.destinationLabel}`
+                : "Your guardians can see your live location."}
+              {walk.createdAtMs
+                ? ` · started ${new Date(walk.createdAtMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+                : ""}
+            </Text>
+            <View style={styles.liveActions}>
+              <View style={styles.liveAction}>
+                <PrimaryButton
+                  label="Resume"
+                  onPress={() => void resumeWalk(walk)}
+                />
+              </View>
+              <View style={styles.liveAction}>
+                <SecondaryButton
+                  label={endingWalkId === walk.id ? "Ending…" : "End walk"}
+                  disabled={endingWalkId != null}
+                  onPress={() => endOpenWalk(walk)}
+                />
+              </View>
+            </View>
+          </View>
+        ))}
+
         <PrimaryButton
           label={resolving ? "Getting location…" : "Start Safe Walk"}
           loading={resolving}
-          onPress={() => setSearchOpen(true)}
+          onPress={() => {
+            if (ensureNoOpenWalk()) setSearchOpen(true);
+          }}
           disabled={resolving}
         />
 
@@ -662,6 +816,33 @@ const styles = StyleSheet.create({
     fontFamily: typography.fontFamily.medium,
     fontSize: typography.size.caption,
   },
+  liveCard: {
+    borderWidth: 1.5,
+    gap: spacing.sm,
+  },
+  liveHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  liveDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  liveTitle: {
+    fontFamily: typography.fontFamily.semibold,
+    fontSize: typography.size.bodyLarge,
+  },
+  liveSub: {
+    fontFamily: typography.fontFamily.regular,
+    fontSize: typography.size.caption,
+  },
+  liveActions: {
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  liveAction: { flex: 1 },
   guardianRow: {
     flexDirection: "row",
     alignItems: "center",

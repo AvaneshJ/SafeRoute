@@ -1,5 +1,6 @@
 import { SafetyScoreChip } from "@/components/design-system/SafetyScoreChip";
 import { UserAvatar } from "@/components/design-system/UserAvatar";
+import { NearestPoliceRow } from "@/components/navigation/NearestPoliceRow";
 import {
   motion,
   radius,
@@ -65,8 +66,18 @@ const ALERT_TONES: Record<
   success: { color: navDark.success, icon: "check-circle" },
 };
 
+export type LiveNavNearestPolice = {
+  name: string;
+  distanceM: number;
+  phone?: string | null;
+};
+
 export type LiveNavigationHUDProps = {
   visible: boolean;
+  /** Nearest police station strip under the ETA row. */
+  nearestPolice?: LiveNavNearestPolice | null;
+  onNavigateToPolice?: () => void;
+  onCallPolice?: () => void;
   /** Current turn instruction (plain text) */
   instruction: string;
   /** Distance to next maneuver, e.g. "120 m" */
@@ -142,6 +153,9 @@ function VibrationIndicator({ active }: { active: boolean }) {
  */
 export function LiveNavigationHUD({
   visible,
+  nearestPolice = null,
+  onNavigateToPolice,
+  onCallPolice,
   instruction,
   maneuverDistance,
   maneuverIcon = "straight",
@@ -218,6 +232,16 @@ export function LiveNavigationHUD({
             <VibrationIndicator active={vibrationActive || safetyScore < 55} />
           </View>
         </View>
+
+        {nearestPolice && onNavigateToPolice ? (
+          <NearestPoliceRow
+            name={nearestPolice.name}
+            distanceM={nearestPolice.distanceM}
+            phone={nearestPolice.phone}
+            onNavigate={onNavigateToPolice}
+            onCall={onCallPolice}
+          />
+        ) : null}
 
         {routeAlert ? (
           <Animated.View

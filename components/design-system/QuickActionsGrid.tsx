@@ -108,7 +108,6 @@ function ActionCard({
         variant === "large" && styles.cardLarge,
         variant === "small" && styles.cardSmall,
         variant === "compact" && styles.cardCompact,
-        action.tourId && styles.fill,
         pressed && {
           transform: [
             { translateY: motion.cardLift },
@@ -141,7 +140,7 @@ function ActionCard({
             { color: c.textPrimary },
             variant === "small" && styles.labelSmall,
           ]}
-          numberOfLines={2}
+          numberOfLines={variant === "small" ? 1 : 2}
         >
           {action.label}
         </Text>
@@ -157,17 +156,17 @@ function ActionCard({
     </Pressable>
   );
 
+  // Every card gets the same wrapper so tour-anchored cards size exactly like
+  // the others; otherwise row columns end up with different widths.
+  const cellStyle = variant === "compact" ? styles.compactCell : styles.cell;
   if (action.tourId) {
     return (
-      <TourAnchor
-        id={action.tourId}
-        style={variant !== "compact" ? styles.flex : undefined}
-      >
+      <TourAnchor id={action.tourId} style={cellStyle}>
         {card}
       </TourAnchor>
     );
   }
-  return card;
+  return <View style={cellStyle}>{card}</View>;
 }
 
 const styles = StyleSheet.create({
@@ -192,24 +191,27 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     borderWidth: StyleSheet.hairlineWidth,
   },
+  cell: {
+    flexGrow: 1,
+    flexShrink: 1,
+    flexBasis: 0,
+    minWidth: 0,
+  },
+  compactCell: {
+    width: "47%",
+    flexGrow: 1,
+  },
   cardLarge: {
     flex: 1,
-    minHeight: 168,
+    minHeight: 160,
     flexDirection: "column",
     justifyContent: "space-between",
     gap: spacing.md,
     padding: spacing.lg,
   },
-  flex: {
-    flex: 1,
-  },
-  fill: {
-    width: "100%",
-    flex: 1,
-  },
   cardSmall: {
     flex: 1,
-    minHeight: 72,
+    minHeight: 64,
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
@@ -217,8 +219,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   cardCompact: {
-    width: "47%",
-    flexGrow: 1,
+    flex: 1,
     alignItems: "center",
     gap: spacing.sm,
   },
