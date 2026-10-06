@@ -1,0 +1,83 @@
+# EAS uses this file INSTEAD of .gitignore when uploading a build.
+# Keep it in sync with .gitignore (especially the secrets section).
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native build caches. Local `expo run:android` writes absolute Windows
+# paths into these (e.g. android/build/generated/autolinking), which break
+# the Linux build server.
+android/build/
+android/app/build/
+android/app/.cxx/
+android/.gradle/
+android/.kotlin/
+android/.idea/
+android/local.properties
+android/app/src/main/java/inline/
+ios/build/
+ios/Pods/
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.hprof
+*.iml
+*.jsbundle
+
+# Editors
+.idea/
+.vscode/
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# secrets / local env
+.env
+.env*.local
+saferoute-758ad-firebase-adminsdk-fbsvc-a173ca1fb1.json
+*-firebase-adminsdk-*.json
+
+# typescript
+*.tsbuildinfo
+
+app-example
+
+# Python caches
+**/__pycache__/
+*.py[cod]
+
+# Geospatial / ML source data (not needed by the mobile build)
+data/**
+!data/README
+!data/processed/
+data/processed/**
+!data/processed/mumbai_routing_graph.pkl
+!data/processed/temporary_hazards.json
+!data/processed/community_bias.json
+!data/processed/community_geohash_agg.json
+!data/processed/community_reports.csv
+!data/processed/road_safety_scores.csv
+!data/processed/lighting_meta.json
+
+# Firebase CLI cache
+.firebase/
+functions/node_modules/
